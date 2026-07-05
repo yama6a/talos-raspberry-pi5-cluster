@@ -6,7 +6,7 @@
 # booted into maintenance mode at their (router-reserved) IPs.
 #
 # Self-contained: talosctl runs as a pinned Docker image, no host talosctl, no
-# shell functions, no PATH games. Generated configs land in ./talos-cluster next
+# shell functions, no PATH games. Generated configs land in ./secrets next
 # to this script; the container mounts that dir as /work so every talosctl call
 # (generate, apply, config, bootstrap, kubeconfig) sees the same files.
 #
@@ -17,13 +17,13 @@
 #
 set -euo pipefail
 
-# Config (CLUSTER_*, CLUSTER_NODES, EXPECT_*) in .env; INSTALL_DISK/IFACE/TALOSCTL_VERSION derived in lib/common.sh.
+# Config (CLUSTER_*, CLUSTER_NODES, EXPECT_*) in .env; INSTALL_DISK/IFACE/TALOSCTL_VERSION derived in lib/shell/common.sh.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/../lib/common.sh"
+source "${SCRIPT_DIR}/common.sh"
 
 require docker
 
-# Generated configs live in the canonical talos-cluster dir (CLUSTER_DIR, from the lib). The lib's
+# Generated configs live in the canonical secrets dir (CLUSTER_DIR, from the lib). The lib's
 # talosctl() mounts it as /work, so the paths passed below are relative to /work (= ${OUTDIR} on the host).
 OUTDIR="${CLUSTER_DIR}"
 mkdir -p "${OUTDIR}"
@@ -43,7 +43,7 @@ echo "Output:   ${OUTDIR}"
 #    kubelet/CRI authenticates EVERY pull from ${GHCR_SERVER} on every node, cluster-wide, no
 #    per-namespace imagePullSecrets. The token (GITHUB_GHCR_PULL_TOKEN_SECRET) comes from the gitignored .env;
 #    it's the PULL token (classic, read:packages) — NOT the write:packages push token 03a uses, so a
-#    compromised node can't push. It lands only in cp-patch.yaml under the gitignored talos-cluster dir,
+#    compromised node can't push. It lands only in cp-patch.yaml under the gitignored secrets dir,
 #    never in git. Empty => no auth block (fine if every image is PUBLIC). GitHub Packages ONLY
 #    authenticates with a CLASSIC token scoped read:packages.
 echo
@@ -255,4 +255,4 @@ talosctl kubeconfig .
 say "Done."
 echo "   talosconfig: ${OUTDIR}/talosconfig   (export TALOSCONFIG=${OUTDIR}/talosconfig)"
 echo "   kubeconfig:  ${OUTDIR}/kubeconfig    (export KUBECONFIG=${OUTDIR}/kubeconfig && kubectl get nodes -o wide)"
-echo "   cp ~/.kube/config ~/.kube/config.bak && KUBECONFIG=\"${SCRIPT_DIR}/talos-cluster/kubeconfig:${HOME}/.kube/config\" kubectl config view --flatten > /tmp/kc && mv /tmp/kc ~/.kube/config"
+echo "   cp ~/.kube/config ~/.kube/config.bak && KUBECONFIG=\"${SCRIPT_DIR}/secrets/kubeconfig:${HOME}/.kube/config\" kubectl config view --flatten > /tmp/kc && mv /tmp/kc ~/.kube/config"

@@ -14,11 +14,11 @@
 #
 set -euo pipefail
 
-# OUT_DIR (the build-cache output dir from 03a_talos_image_builder.sh) is derived in lib/common.sh.
+# OUT_DIR (the build-cache output dir from 03a_talos_image_builder.sh) is derived in lib/shell/common.sh.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/../lib/common.sh"
+source "${SCRIPT_DIR}/common.sh"
 
-# The staged image from 03a (OUT_DIR comes from the shared build-cache key in lib/common.sh).
+# The staged image from 03a (OUT_DIR comes from the shared build-cache key in lib/shell/common.sh).
 # Filename matches 03a's IMAGE_NAME. To flash a different build, point OUT_DIR's inputs at it in .env.
 RAW_XZ="${OUT_DIR}/metal-arm64-rpi5.raw.xz"
 

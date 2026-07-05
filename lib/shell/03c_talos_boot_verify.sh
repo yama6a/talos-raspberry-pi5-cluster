@@ -14,9 +14,9 @@
 #
 set -u
 
-# Config (API port, CLUSTER_NODES, the EXPECT_* checks) in .env; NODES/TALOSCTL_VERSION derived in lib/common.sh.
+# Config (API port, CLUSTER_NODES, the EXPECT_* checks) in .env; NODES/TALOSCTL_VERSION derived in lib/shell/common.sh.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/../lib/common.sh"
+source "${SCRIPT_DIR}/common.sh"
 
 # ---- 03c-only boot-verify expectations --------------------------------------
 EXPECT_TALOS="$TALOS_VERSION"                # our build's Talos version (a local "-dirty" build matches too)

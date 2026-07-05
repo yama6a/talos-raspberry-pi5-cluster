@@ -26,7 +26,7 @@ set -euo pipefail
 
 # All config (versions, kernel ref, extensions, registry, paths) lives in .env.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/../lib/common.sh"
+source "${SCRIPT_DIR}/common.sh"
 
 BUILDER_REPO="https://github.com/talos-rpi5/talos-builder.git"
 WORK="${BUILD_DIR}/talos-builder"

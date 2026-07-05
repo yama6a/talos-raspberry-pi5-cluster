@@ -18,7 +18,7 @@ half-rack mount, NVMe-booted.
 
 ## Compute: 3x Raspberry Pi 5 (8GB)
 
-<img src="01_hardware/raspi5.png" alt="Raspberry Pi 5 Board" width="400"/>
+<img src="images/raspi5.png" alt="Raspberry Pi 5 Board" width="400"/>
 
 - 8GB for headroom: control-plane + etcd + actual workloads on each node.
 - 3 nodes = odd etcd quorum, tolerates 1 failure.
@@ -26,8 +26,8 @@ half-rack mount, NVMe-booted.
 
 ## Rack mount: GeeekPi DP-0046 (10" 2U)
 
-<img src="01_hardware/rackmount_1.jpg" alt="GeeekPi 10 inch rack" height="400"/>
-<img src="01_hardware/rackmount_2.png" alt="GeeekPi 10 inch rack" height="400"/>
+<img src="images/rackmount_1.jpg" alt="GeeekPi 10 inch rack" height="400"/>
+<img src="images/rackmount_2.png" alt="GeeekPi 10 inch rack" height="400"/>
 
 - GeeekPi DP-0046: a 10" 2U rack mount with PCIe NVMe boards for Pi 5/4B. Same product DeskPi documents as the
   "Rackmate 2U Rack Mount with PCIe NVMe Board" (GeeekPi / DeskPi are sister brands).
@@ -40,8 +40,8 @@ half-rack mount, NVMe-booted.
 The bundled NVMe board is the 52Pi RS-P11 ([EP-0234](https://wiki.52pi.com/index.php?title=EP-0234)), a
 bottom-mount cluster board that sits under the Pi.
 
-<img src="01_hardware/rs-p11-top.jpg" height="400"/>
-<img src="01_hardware/rs-p11-front.jpg" height="400"/>
+<img src="images/rs-p11-top.jpg" height="400"/>
+<img src="images/rs-p11-front.jpg" height="400"/>
 
 - M.2 M-key, 2230-2280; (we are using 2280).
 - PCIe Gen2 by default. Pi 5 PCIe is a single Gen2 lane (~450 MB/s). Gen3 is forceable (`dtparam=pciex1_gen=3`,
@@ -58,7 +58,7 @@ bottom-mount cluster board that sits under the Pi.
 
 Model CT1000P310SSD8, M.2 2280, ~220 TBW, ~1700 SEK (~$180 USD) (NAND prices still elevated post-2024 shortage).
 
-<img src="01_hardware/crucial_p310.png" alt="Crucial P310 SSD" height="200"/>
+<img src="images/crucial_p310.png" alt="Crucial P310 SSD" height="200"/>
 
 - Endurance is the binding spec, not speed. All nodes are control-plane, so every node runs etcd with constant
   fsync/WAL writes. TBW is what matters here.
@@ -74,7 +74,7 @@ Model CT1000P310SSD8, M.2 2280, ~220 TBW, ~1700 SEK (~$180 USD) (NAND prices sti
 
 One 27W USB-C PSU per Pi, plugged directly into the Pi's own USB-C port.
 
-<img src="01_hardware/raspi-pd.jpg" alt="Raspberry Pi 27W Power Supply" height="200"/>
+<img src="images/raspi-pd.jpg" alt="Raspberry Pi 27W Power Supply" height="200"/>
 
 - PD straight into the Pi gives the full 5A, automatically. Plugged into the Pi's own USB-C port it negotiates the full
   5A / ~25W over PD by itself, and the firmware then raises the downstream USB cap from 600mA to 1.6A on its own, no
@@ -93,7 +93,7 @@ One 27W USB-C PSU per Pi, plugged directly into the Pi's own USB-C port.
 
 Blower-style active cooler (aluminium heatsink + PWM fan), one per board. Kit included 3 thermal pads. Placement:
 
-<img src="01_hardware/cooler.jpg" alt="Pi 5 cooler with thermal pads" height="300"/>
+<img src="images/cooler.jpg" alt="Pi 5 cooler with thermal pads" height="300"/>
 
 - CPU (BCM2712 SoC): 1 pad. Primary contact, the tallest die.
 - RP1 I/O chip (southbridge): 2 thermal pads stacked. RP1 sits lower than the SoC, so a single pad left the cooler
@@ -106,7 +106,7 @@ second-warmest chip after the SoC.
 
 ## End result (assembled)
 
-<img src="01_hardware/assembled_blade.jpg" alt="Assembled Pi 5 Blade" height="250"/>
-<img src="01_hardware/assembled_rack.jpg" alt="Assembled Pi 5 Rack" height="250"/>
+<img src="images/assembled_blade.jpg" alt="Assembled Pi 5 Blade" height="250"/>
+<img src="images/assembled_rack.jpg" alt="Assembled Pi 5 Rack" height="250"/>
 
 Granted, the rack still needs a bit of better cable management, but that's a problem for future-me.

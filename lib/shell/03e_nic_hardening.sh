@@ -16,18 +16,18 @@
 # A short-lived privileged probe pod reads only what has no resource: EEE + watchdog device.
 #
 # Self-contained: talosctl AND kubectl run as pinned Docker images, mounting
-# talos-cluster/ (talosconfig + kubeconfig from 03d). Never triggers the watchdog.
+# secrets/ (talosconfig + kubeconfig from 03d). Never triggers the watchdog.
 #
 # Requires: docker (host networking enabled). The probe node needs registry pull access.
 #
 set -uo pipefail
 
-# Shared config (EXPECT_NIC, ...) lives in .env; TALOSCTL_VERSION is derived in lib/common.sh.
+# Shared config (EXPECT_NIC, ...) lives in .env; TALOSCTL_VERSION is derived in lib/shell/common.sh.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/../lib/common.sh"
+source "${SCRIPT_DIR}/common.sh"
 
 # ---- knobs ------------------------------------------------------------------
-OUTDIR="${CLUSTER_DIR}"                    # talosconfig + kubeconfig live here (the lib's talosctl() mounts it); IFACE derived in lib/common.sh
+OUTDIR="${CLUSTER_DIR}"                    # talosconfig + kubeconfig live here (the lib's talosctl() mounts it); IFACE derived in lib/shell/common.sh
 KUBECTL_IMAGE="registry.k8s.io/kubectl:v${KUBERNETES_VERSION}"   # dockerized kubectl pinned to the cluster's k8s version (.env), no host/cluster skew; tag needs the 'v'
 DEBUG_IMAGE="alpine:3.21"                  # probe pod; apk-installs ethtool
 WATCHDOG_TIMEOUT="15s"                     # floored to 10s (Talos min); Pi hw max ~15s
@@ -45,7 +45,7 @@ PROBE_POD="nic-hw-probe"
 PATCH_FILE="nic-hardening-patch.yaml"      # written into OUTDIR (=/work in the container)
 # -----------------------------------------------------------------------------
 
-# dockerized kubectl pinned to the cluster's k8s version (KUBERNETES_VERSION), mounting the talos-cluster dir.
+# dockerized kubectl pinned to the cluster's k8s version (KUBERNETES_VERSION), mounting the secrets dir.
 # (talosctl() is the lib's dockerized wrapper, which mounts the same CLUSTER_DIR as /work.)
 kubectl()  { docker run --rm -i --network host -v "${OUTDIR}:/work" \
   -e KUBECONFIG=/work/kubeconfig "${KUBECTL_IMAGE}" "$@"; }

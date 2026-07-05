@@ -61,7 +61,7 @@ the upstream RP1 patches that allow step 04 to disable EEE on the NIC.
 ## The build
 
 Script: `03a_talos_image_builder.sh` (macOS, Apple Silicon). All config (version knobs, kernel ref, registry,
-extensions) lives in `.env` (build-cache output path derived in `lib/common.sh`), shared by all the step-03 scripts.
+extensions) lives in `.env` (build-cache output path derived in `lib/shell/common.sh`), shared by all the step-03 scripts.
 A clean run builds and validates; it exits non-zero if anything goes wrong.
 
 What it does:
@@ -97,7 +97,7 @@ The four rebases (things the upstream pipeline can't handle at this Talos versio
    properly and the EFI partition ends up with the boot bits it needs.
 
 ```bash
-03_operating_system/03a_talos_image_builder.sh
+lib/shell/03a_talos_image_builder.sh
 ```
 
 First run takes a while. Full clang/ThinLTO kernel compile is 30-40 min on 12 cores (macBook Pro, M2 Pro). Later runs
@@ -125,7 +125,7 @@ the large kernel/overlay layers over the network on every run for no benefit.
 **Publishing the installer (for network upgrades).** After validation, `03a` optionally publishes **only** the
 installer image to GHCR — the one artifact a node needs to upgrade. Set `GITHUB_GHCR_PUSH_TOKEN_SECRET` (a classic token
 scoped `write:packages`) in `.env` and `03a` re-tags the validated installer and pushes it to
-`ghcr.io/<GHCR_USER>/<INSTALLER_PACKAGE>:<TALOS_VERSION>-arm64` (the `INSTALLER_REF` derived in `lib/common.sh`).
+`ghcr.io/<GHCR_USER>/<INSTALLER_PACKAGE>:<TALOS_VERSION>-arm64` (the `INSTALLER_REF` derived in `lib/shell/common.sh`).
 Leave the token empty to build + validate without publishing. Push and pull tokens are kept separate on purpose: the
 write token lives only on the build host (here), never in node config, so a compromised node can't push to GHCR.
 
@@ -297,7 +297,7 @@ picked `192.168.100.1` for the VIP.
 > every pull from `ghcr.io` on every node, cluster-wide, with no per-namespace `imagePullSecrets` to wire into
 > workloads. We chose node-level auth over an in-cluster (sealed-secret) pull secret precisely because it's global
 > and namespace-agnostic; the cost is that the token lives in the machine config (in the gitignored
-> `talos-cluster/cp-patch.yaml`, never committed) rather than in the sealed-secrets pipeline, and rotating it means
+> `secrets/cp-patch.yaml`, never committed) rather than in the sealed-secrets pipeline, and rotating it means
 > editing `.env` and re-running `03d`. The host + username are plain config (`GHCR_SERVER`/`GHCR_USER`); leave
 > `GITHUB_GHCR_PULL_TOKEN_SECRET` empty to skip (the auth block is simply omitted). This is the **pull** token — distinct
 > from the `write:packages` `GITHUB_GHCR_PUSH_TOKEN_SECRET` `03a` uses to publish, which never touches node config. GHCR
@@ -318,7 +318,7 @@ bootstrap. No manual stopwatch.
 ### Verify
 
 ```bash
-export KUBECONFIG=./talos-cluster/kubeconfig
+export KUBECONFIG=./secrets/kubeconfig
 kubectl get nodes -o wide                  # 3x NotReady, no CNI yet; flips to Ready after step 04 (Cilium)
 talosctl -n <cp1-ip> etcd members          # 3 members
 ```
@@ -357,7 +357,7 @@ the defence for each:
 ### `03e_nic_hardening.sh` (implemented now)
 
 Fully automated, idempotent, safe to re-run. Reuses the dockerized `talosctl` + `kubectl`
-and `talos-cluster/` from cluster bring-up.
+and `secrets/` from cluster bring-up.
 
 ```bash
 ./03e_nic_hardening.sh
@@ -460,7 +460,7 @@ Caveats / preconditions:
 Verify (GitOps, no imperative step):
 
 ```bash
-export KUBECONFIG=./03_operating_system/talos-cluster/kubeconfig
+export KUBECONFIG=./secrets/kubeconfig
 kubectl get ds -n kube-system nic-keeper                           # DESIRED = CURRENT = READY = 3
 kubectl logs -n kube-system -l app.kubernetes.io/name=nic-keeper   # one pod per node; event=eee-off ok
 kubectl get nodes -L node.kubernetes.io/instance-type              # all three show rpi5

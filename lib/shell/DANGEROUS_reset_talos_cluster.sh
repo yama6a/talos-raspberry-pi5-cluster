@@ -11,7 +11,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/lib/common.sh"   # dockerized talosctl() (mounts CLUSTER_DIR) + CLUSTER_NODES from .env
+source "${SCRIPT_DIR}/common.sh"   # dockerized talosctl() (mounts CLUSTER_DIR) + CLUSTER_NODES from .env
 
 read -r -p ">> Destroy ENTIRE Talos cluster AND wipe ALL Longhorn/PVC data (u-longhorn)? type YES: " confirm
 [ "${confirm}" = "YES" ] || { echo "skipped destruction (phew!)."; exit 0; }

@@ -16,7 +16,7 @@
 # version it defaults to. KUBERNETES_VERSION can't exceed the pinned Talos's default (see .env); bump
 # TALOS_VERSION + run 03a/03f before raising it past that ceiling, or upgrade-k8s rejects it.
 #
-# Self-contained: talosctl runs as a pinned Docker image against talos-cluster/ (talosconfig from 03d),
+# Self-contained: talosctl runs as a pinned Docker image against secrets/ (talosconfig from 03d),
 # like 03c-03f. Talos work -> Docker (the native macOS talosctl is unreliable, see 03_operating_system.md).
 #
 # NOT DANGEROUS_ (no wipe, no reboot; k8s control-plane roll with health gating) but it does roll the
@@ -25,9 +25,9 @@
 #
 set -euo pipefail
 
-# KUBERNETES_VERSION / NODES / TALOSCTL_VERSION derived-or-read in lib/common.sh (from .env).
+# KUBERNETES_VERSION / NODES / TALOSCTL_VERSION derived-or-read in lib/shell/common.sh (from .env).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/../lib/common.sh"
+source "${SCRIPT_DIR}/common.sh"
 
 require docker
 docker info >/dev/null 2>&1 || die "docker not responding (start Rancher/Docker Desktop)"

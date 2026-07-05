@@ -10,7 +10,7 @@
 #   1. maintenance preflight        : every node must answer the INSECURE (maintenance) API — fast-fail
 #                                      if any is already configured (that's a rebuild, not a bootstrap)
 #   2. archive local creds          : mv secrets.yaml/kubeconfig/talosconfig/sealed-secrets-master.key +
-#                                      03d scratch into talos-cluster/backup_<ts>/ so 03d mints a NEW PKI
+#                                      03d scratch into secrets/backup_<ts>/ so 03d mints a NEW PKI
 #   3. 03d_talos_cluster_config.sh  : generate fresh config, apply, bootstrap etcd, write kube/talosconfig
 #   4. 03e_nic_hardening.sh         : NIC hardening (EEE/watchdog)
 #   5. 04_cilium.sh                 : CNI + prometheus-operator CRDs + LB-IPAM/L2 + Hubble
@@ -42,16 +42,12 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
-source "${SCRIPT_DIR}/lib/common.sh"   # say/die/warn/ok + CLUSTER_DIR + CLUSTER_NODES + secret .env keys
+source "${SCRIPT_DIR}/common.sh"   # say/die/warn/ok + CLUSTER_DIR + CLUSTER_NODES + secret .env keys + REPO_ROOT
+cd "$REPO_ROOT"                     # run from the repo root (git ops, relative hints)
 
 # ---- knobs ------------------------------------------------------------------
-STEP_03_DIR="${SCRIPT_DIR}/03_operating_system"
-STEP_04_DIR="${SCRIPT_DIR}/04_networking"
-STEP_05_DIR="${SCRIPT_DIR}/05_gitops"
-STEP_06_DIR="${SCRIPT_DIR}/06_secrets"
-STEP_07_DIR="${SCRIPT_DIR}/07_ingress"
-STEP_09_DIR="${SCRIPT_DIR}/09_monitoring"
+STEP=0; STEP_TOTAL=14                          # shared step counter (common.sh step/run_step); bump TOTAL if you add/remove a step
+STEP_DIR="$SCRIPT_DIR"                          # every step script is a sibling of this orchestrator in lib/shell/
 KUBECONFIG_FILE="${CLUSTER_DIR}/kubeconfig"
 INGRESS_GW_NS="gateway"                        # namespace of the shared Gateway (ingress verify)
 INGRESS_HOSTS=""                               # space-separated hosts to check; empty = derive from Gateways
@@ -69,7 +65,7 @@ COMMIT_MSG_SEAL="bootstrap: re-seal SSO/SMTP secrets against the new sealed-secr
 # === prereqs =================================================================
 require docker git kubectl helm yq kubeseal
 docker info >/dev/null 2>&1 || die "docker not responding (start Rancher/Docker Desktop)"
-[ -f "${STEP_03_DIR}/03d_talos_cluster_config.sh" ] || die "missing 03d, run from the repo root"
+[ -f "${STEP_DIR}/03d_talos_cluster_config.sh" ] || die "missing 03d, run from the repo root"
 IPS=(); for e in "${CLUSTER_NODES[@]}"; do IPS+=("${e##*:}"); done
 [ "${#IPS[@]}" -gt 0 ] || die "no nodes set, edit CLUSTER_NODES in .env"
 
@@ -79,7 +75,7 @@ cat <<EOF
 This will BOOTSTRAP a FIRST-TIME Talos cluster on freshly-flashed nodes:
   nodes   : ${IPS[*]}
   archive : secrets.yaml + kubeconfig + talosconfig + sealed-secrets-master.key (+ 03d scratch)
-            -> talos-cluster/backup_<timestamp>/   (03d then mints a NEW Talos CA; the old creds stop working)
+            -> secrets/backup_<timestamp>/   (03d then mints a NEW Talos CA; the old creds stop working)
   flow    : preflight -> archive -> 03d -> 03e -> 04 -> 07_gateway -> commit/push -> 05 (ArgoCD)
             -> re-seal SSO + SMTP against the new key -> commit/push -> back up the new key -> verify ingress
 
@@ -96,7 +92,7 @@ docker pull -q "ghcr.io/siderolabs/talosctl:${TALOSCTL_VERSION}" >/dev/null 2>&1
 # A maintenance node answers the INSECURE API; a CONFIGURED one does NOT (see 03d). So requiring the
 # insecure `version` to succeed proves the node is fresh-in-maintenance, not already running a cluster.
 # --insecure needs no talosconfig, so this works even though we're about to archive it.
-say "STEP 1/14, checking every node is in MAINTENANCE mode (fresh-init preflight)"
+step "checking every node is in MAINTENANCE mode (fresh-init preflight)"
 for ip in "${IPS[@]}"; do
   printf '   %-15s ' "$ip"
   deadline=$(( $(date +%s) + MAINT_TIMEOUT ))
@@ -110,13 +106,13 @@ done
 ok "all nodes in maintenance"
 
 # === STEP 2. archive existing local creds -> backup_<timestamp>/ ==============
-# Clears the canonical talos-cluster dir of PKI-bearing files so 03d generates a FRESH secrets.yaml
+# Clears the canonical secrets dir of PKI-bearing files so 03d generates a FRESH secrets.yaml
 # (and thus a new CA). Critically this also moves controlplane.yaml, which would otherwise trigger 03d's
 # --from-controlplane-config migration and reuse the OLD PKI. Only a known file list is moved, never a
 # glob, so user files (.env.other-secrets, .DS_Store) are left untouched.
 TS="$(date +%Y%m%d-%H%M%S)"
 BACKUP_SUBDIR="${CLUSTER_DIR}/backup_${TS}"
-say "STEP 2/14, archiving existing creds -> ${BACKUP_SUBDIR}"
+step "archiving existing creds -> ${BACKUP_SUBDIR}"
 mkdir -p "$BACKUP_SUBDIR"
 moved=0
 for f in "${ARCHIVE_FILES[@]}"; do
@@ -127,26 +123,17 @@ done
 if [ "$moved" -gt 0 ]; then ok "archived ${moved} file(s)"; else rmdir "$BACKUP_SUBDIR" 2>/dev/null; ok "nothing to archive (already a clean start)"; fi
 
 # === STEP 3-4. Talos bring-up (03d mints fresh PKI; abort on first failure) ===
-say "STEP 3/14, 03d_talos_cluster_config.sh (fresh PKI, apply config, bootstrap etcd)"
-( cd "$STEP_03_DIR" && bash ./03d_talos_cluster_config.sh ) || die "03d failed, fix and resume from 03d by hand"
-ok "03d done"
-
-say "STEP 4/14, 03e_nic_hardening.sh"
-( cd "$STEP_03_DIR" && bash ./03e_nic_hardening.sh ) || die "03e failed, fix and resume from 03e by hand"
-ok "03e done"
+run_step "fresh PKI, apply config, bootstrap etcd" "$STEP_DIR" 03d_talos_cluster_config.sh
+run_step "NIC hardening (EEE/watchdog)"            "$STEP_DIR" 03e_nic_hardening.sh
 
 # === STEP 5. CNI ==============================================================
-say "STEP 5/14, 04_cilium.sh (CNI + monitoring CRDs + LB/L2 + Hubble)"
-( cd "$STEP_04_DIR" && bash ./04_cilium.sh ) || die "04_cilium failed, fix and resume from 04 by hand"
-ok "04_cilium done"
+run_step "CNI + monitoring CRDs + LB/L2 + Hubble" "$STEP_DIR" 04_cilium.sh
 
 # === STEP 6. gateway config from .env (chart values; no cluster) ===
-say "STEP 6/14, 07_gateway.sh (propagate LE_EMAIL/BASE_DOMAIN into the gateway chart values)"
-( cd "$STEP_07_DIR" && bash ./07_gateway.sh ) || die "07_gateway failed, fix and resume from 07_gateway by hand"
-ok "07_gateway done"
+run_step "propagate LE_EMAIL/BASE_DOMAIN into the gateway chart values" "$STEP_DIR" 07_gateway.sh
 
 # === STEP 7. commit + push (ArgoCD deploys the REMOTE; 05 refuses a dirty tree) ===
-say "STEP 7/14, git add + commit + push (config so far: LB range + gateway values)"
+step "git add + commit + push (config so far: LB range + gateway values)"
 git add -A
 if git diff --cached --quiet; then
   ok "nothing new to commit"
@@ -157,15 +144,13 @@ git push || die "git push failed, ArgoCD deploys the REMOTE; push manually then 
 ok "remote up to date"
 
 # === STEP 8. ArgoCD ===========================================================
-say "STEP 8/14, 05_argocd.sh (bootstrap ArgoCD; it delivers the rest from git)"
-( cd "$STEP_05_DIR" && bash ./05_argocd.sh ) || die "05_argocd failed, fix and resume from 05 by hand"
-ok "05_argocd done"
+run_step "bootstrap ArgoCD; it delivers the rest from git" "$STEP_DIR" 05_argocd.sh
 
 # === STEP 9. wait for the sealed-secrets controller (ArgoCD wave 2) ===========
 # kubeseal (steps 10-11) + the key backup (13) all need the controller up. It's a wave-2 app, so ArgoCD
 # creates it a bit after 05; poll until a controller pod is Ready. Abort with a manual-recovery hint if
 # it never comes up (the cluster is still fine — you'd just re-seal + back up by hand later).
-say "STEP 9/14, waiting for the sealed-secrets controller (ArgoCD wave 2), up to ${CONTROLLER_WAIT}s"
+step "waiting for the sealed-secrets controller (ArgoCD wave 2), up to ${CONTROLLER_WAIT}s"
 export KUBECONFIG="$KUBECONFIG_FILE"
 deadline=$(( $(date +%s) + CONTROLLER_WAIT ))
 until kubectl get pods -n "$SS_CONTROLLER_NS" -l "$SS_POD_SELECTOR" \
@@ -178,25 +163,25 @@ echo; ok "sealed-secrets controller Ready"
 # === STEP 10. re-seal Google SSO against the NEW key (best-effort) ============
 # 07_google_sso.sh no longer prompts (allowlists are per-ingress values already in git); it just re-writes
 # the shared clientID + re-seals google-oauth against the fresh key. Skipped if the .env creds are empty.
-say "STEP 10/14, re-seal Google SSO (07_google_sso.sh: re-writes clientID + re-seals the client secret)"
 if [ -n "$GOOGLE_SSO_CLIENT_ID" ] && [ -n "$GOOGLE_SSO_CLIENT_SECRET" ]; then
-  ( cd "$STEP_07_DIR" && bash ./07_google_sso.sh </dev/null ) \
-    || warn "07_google_sso didn't complete; re-run it by hand ('07_google_sso.sh') + commit/push"
+  run_step "re-writes clientID + re-seals the client secret" "$STEP_DIR" 07_google_sso.sh best-effort \
+    "07_google_sso didn't complete; re-run it by hand ('07_google_sso.sh') + commit/push"
 else
+  step "re-seal Google SSO (skipped: .env creds empty)"
   warn "GOOGLE_SSO_CLIENT_ID/SECRET empty in .env -> skipping SSO re-seal (google-oauth stays orphaned until you set them + run 07)"
 fi
 
 # === STEP 11. re-seal Grafana SMTP against the NEW key (best-effort) ==========
-say "STEP 11/14, re-seal Grafana SMTP (09_grafana_smtp.sh)"
 if [ -n "$SMTP_GOOGLE_APP_PASSWORD_SECRET" ]; then
-  ( cd "$STEP_09_DIR" && bash ./09_grafana_smtp.sh ) \
-    || warn "09_grafana_smtp didn't complete; re-run it by hand + commit/push"
+  run_step "re-seal Grafana SMTP against the new key" "$STEP_DIR" 09_grafana_smtp.sh best-effort \
+    "09_grafana_smtp didn't complete; re-run it by hand + commit/push"
 else
+  step "re-seal Grafana SMTP (skipped: .env secret empty)"
   warn "SMTP_GOOGLE_APP_PASSWORD_SECRET empty in .env -> skipping SMTP re-seal (Grafana email off; committed grafana-smtp stays orphaned)"
 fi
 
 # === STEP 12. commit + push the re-sealed secrets (best-effort) ===============
-say "STEP 12/14, git add + commit + push the re-sealed secrets (ArgoCD unseals them, waves 4 & 7)"
+step "git add + commit + push the re-sealed secrets (ArgoCD unseals them, waves 4 & 7)"
 git add -A
 if git diff --cached --quiet; then
   ok "nothing new to commit"
@@ -207,54 +192,15 @@ git push || warn "push failed; push by hand so ArgoCD picks up the re-sealed sec
 
 # === STEP 13. back up the NEW master key (best-effort) ========================
 # So a future DANGEROUS_rebuild_cluster.sh can RESTORE it instead of orphaning these SealedSecrets again.
-say "STEP 13/14, back up the new sealed-secrets master key (06_backup_sealed_secrets_key.sh)"
-( cd "$STEP_06_DIR" && bash ./06_backup_sealed_secrets_key.sh ) \
-  || warn "key backup didn't complete; run 06_backup_sealed_secrets_key.sh by hand once the controller is up"
+run_step "back up the new sealed-secrets master key" "$STEP_DIR" 06_backup_sealed_secrets_key.sh best-effort \
+  "key backup didn't complete; run 06_backup_sealed_secrets_key.sh by hand once the controller is up"
 
 # === STEP 14. verify the ingress data path actually serves (best-effort) ======
-# ArgoCD brings up the ingress stack ASYNC after step 8 and HTTP-01 issuance takes minutes, so poll each
-# HTTPS host until it serves a REAL response: (1) the served cert's issuer says "Let's Encrypt" (rejects
-# cert-manager's temporary self-signed cert), and (2) curl --http2 returns a normal 2xx/3xx/4xx. We hit
-# the Gateway LB IP with the right SNI (not public DNS), so a router/DDNS quirk can't wedge it. -k ignores
-# CA trust (LE staging is fine). Best-effort: warns, never fails the bootstrap.
-say "STEP 14/14, verify ingress serving (LE cert + clean HTTP/2), up to ${INGRESS_WAIT}s"
-if ! command -v curl >/dev/null || ! command -v openssl >/dev/null; then
-  warn "curl/openssl not both present, skipping ingress verification"
-else
-  ingress_serves_ok() {   # $1=host $2=lbip ; returns 0 only for a real, LE-backed, clean-h2 response
-    local host="$1" ip="$2" issuer code ver
-    issuer="$(printf '' | openssl s_client -connect "${ip}:443" -servername "$host" 2>/dev/null \
-              | openssl x509 -noout -issuer 2>/dev/null)"
-    printf '%s' "$issuer" | grep -qiE "Let.?s Encrypt" || return 1   # temp/self-signed/wrong cert -> wait
-    read -r code ver < <(curl -k --http2 -sS -o /dev/null -w '%{http_code} %{http_version}' \
-      --resolve "${host}:443:${ip}" --max-time 10 "https://${host}/" 2>/dev/null)
-    [ "${ver:-}" = "2" ] || return 1                                 # ERR_HTTP2_PROTOCOL_ERROR/conn fail -> wait
-    case "${code:-000}" in [234][0-9][0-9]) return 0;; *) return 1;; esac   # 000 / 5xx -> wait
-  }
-
-  deadline=$(( $(date +%s) + INGRESS_WAIT )); remaining=""; lbip=""
-  while :; do
-    lbip="$(kubectl get gateway -n "$INGRESS_GW_NS" \
-            -o jsonpath='{range .items[*]}{.status.addresses[0].value}{"\n"}{end}' 2>/dev/null | grep -m1 .)"
-    if [ -n "$INGRESS_HOSTS" ]; then hosts="$INGRESS_HOSTS"; else
-      hosts="$(kubectl get gateway -n "$INGRESS_GW_NS" \
-               -o jsonpath='{range .items[*].spec.listeners[?(@.protocol=="HTTPS")]}{.hostname}{"\n"}{end}' 2>/dev/null \
-               | sort -u | tr '\n' ' ')"
-    fi
-    if [ -n "$lbip" ] && [ -n "${hosts// }" ]; then
-      remaining=""
-      for h in $hosts; do ingress_serves_ok "$h" "$lbip" || remaining="${remaining} ${h}"; done
-      [ -z "${remaining// }" ] && { ok "all ingress hosts serve an LE cert over clean HTTP/2 (via ${lbip})"; break; }
-    fi
-    if [ "$(date +%s)" -ge "$deadline" ]; then
-      warn "ingress not fully serving within ${INGRESS_WAIT}s${lbip:+ (LB ${lbip})}, still pending:${remaining:-  <gateway/hosts not found yet>}"
-      warn "inspect: kubectl get gateway,certificate -A ; kubectl -n argocd get applications"
-      break
-    fi
-    printf '.'; sleep 10
-  done
-  echo
-fi
+# ArgoCD brings up the ingress stack ASYNC after step 8 and HTTP-01 issuance takes minutes; verify_ingress
+# (lib/shell/common.sh) polls each HTTPS host until it serves a REAL, LE-backed response over clean HTTP/2.
+# Best-effort: warns, never fails the bootstrap.
+step "verify ingress serving (LE cert + clean HTTP/2), up to ${INGRESS_WAIT}s"
+verify_ingress "$INGRESS_GW_NS" "$INGRESS_WAIT" $INGRESS_HOSTS || true
 
 # === summary =================================================================
 cat <<EOF
@@ -264,7 +210,7 @@ ArgoCD is bootstrapped and reconciling every app from git. Watch it:
   KUBECONFIG=${KUBECONFIG_FILE} kubectl get applications -n argocd -w
 
 Notes:
-  - Old creds were archived under ${BACKUP_SUBDIR:-talos-cluster/backup_<ts>} (the previous Talos CA /
+  - Old creds were archived under ${BACKUP_SUBDIR:-secrets/backup_<ts>} (the previous Talos CA /
     kubeconfig / sealed-secrets key). The cluster now uses a FRESH identity.
   - A NEW sealed-secrets master key was backed up to ${CLUSTER_DIR}/sealed-secrets-master.key
     (if STEP 13 succeeded) — keep a copy off-cluster; a future rebuild restores from it.

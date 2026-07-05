@@ -20,7 +20,7 @@
 #     upgrade fails, re-run 03d with the pull token, or make the package public.
 #   - The cluster is up (03d).
 #
-# Self-contained: talosctl runs as a pinned Docker image against talos-cluster/ (talosconfig from 03d),
+# Self-contained: talosctl runs as a pinned Docker image against secrets/ (talosconfig from 03d),
 # like 03c-03e. Talos work -> Docker (the native macOS talosctl is unreliable, see 03_operating_system.md).
 #
 # NOT DANGEROUS_ (atomic A/B with rollback, not a wipe) but it reboots every node in turn, so it asks for
@@ -29,9 +29,9 @@
 #
 set -euo pipefail
 
-# Node list (CLUSTER_NODES) in .env; INSTALLER_REF / NODES / TALOSCTL_VERSION derived in lib/common.sh.
+# Node list (CLUSTER_NODES) in .env; INSTALLER_REF / NODES / TALOSCTL_VERSION derived in lib/shell/common.sh.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/../lib/common.sh"
+source "${SCRIPT_DIR}/common.sh"
 
 # ---- knobs ------------------------------------------------------------------
 HEALTH_TIMEOUT=1800   # secs to wait per node for reboot + installer pull + rejoin-healthy (nodes pull the
