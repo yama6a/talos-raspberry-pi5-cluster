@@ -2,4 +2,4 @@ apiVersion: v2
 name: coredns
 description: Scheduling constraints patched onto the Talos-owned coredns Deployment. Renders no coredns of its own.
 type: application
-version: 1.0.0 # PUBLISHED to ghcr.io: bump in the same PR that changes this chart, or the push is rejected
+version: 1.0.1 # PUBLISHED to ghcr.io: bump in the same PR that changes this chart, or the push is rejected
