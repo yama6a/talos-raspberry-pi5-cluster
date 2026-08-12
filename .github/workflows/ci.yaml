@@ -47,6 +47,34 @@ jobs:
       - name: validate renovate.json5 # a broken config silently halts ALL dependency updates
         run: npx --yes --package renovate -- renovate-config-validator --strict renovate.json5
 
+  chart-version:
+    name: chart-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # need main to diff against
+      # publish-charts pushes on merge and refuses to overwrite an existing version, so a chart edited without
+      # a version bump would silently never reach the registry. Fail here instead, while it is still fixable.
+      - name: a changed chart must carry a bumped version
+        run: |
+          fail=0
+          base="origin/${{ github.base_ref }}"
+          for dir in charts/*/; do
+            name="$(basename "$dir")"
+            git diff --quiet "$base"...HEAD -- "$dir" && continue
+            new="$(awk '/^version:/{print $2}' "${dir}Chart.yaml")"
+            old="$(git show "$base:${dir}Chart.yaml" 2>/dev/null | awk '/^version:/{print $2}')"
+            if [ -z "$old" ]; then echo "::notice::${name} is new (${new})"; continue; fi
+            if [ "$new" = "$old" ]; then
+              echo "::error file=${dir}Chart.yaml::${name} changed but its version is still ${old}. Bump it, or publish-charts will skip the change."
+              fail=1
+            else
+              echo "::notice::${name} ${old} -> ${new}"
+            fi
+          done
+          exit $fail
+
   helm:
     name: helm
     runs-on: ubuntu-latest

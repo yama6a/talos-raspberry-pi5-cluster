@@ -1,19 +1,27 @@
-# Publishes the two hardware/OS charts to GHCR as OCI artifacts. The platform repo consumes them as pinned
-# upstream dependencies, so Argo CD still delivers and self-heals them while they are authored here.
+# Publishes the hardware/OS charts to GHCR as OCI artifacts, on merge to main. The platform repo consumes them
+# as pinned upstream dependencies, so Argo CD still delivers and self-heals them while they are authored here.
 #
-# Version comes from each chart's own Chart.yaml `version:`. Unlike the platform repo's wrapper charts, whose
-# version is inert, THESE are published artifacts: bump the chart version in the same PR that changes it, or
-# the push is rejected as an existing tag.
+# There is no GitHub Release and no tag to cut: the registry IS the distribution channel. Consumers pin a
+# version in their Chart.yaml, and Renovate resolves updates from the registry's tag list.
+#
+# A chart is published only when its Chart.yaml `version` is not already in the registry, so a commit that
+# touches anything else is a no-op. The CI `chart-version` job is what guarantees a changed chart carries a
+# bumped version in the first place.
 name: publish-charts
 
 on:
   push:
-    tags: ["charts-v*"] # cut one tag per release; the charts' own versions decide what is pushed
+    branches: [main]
+    paths: ["charts/**", ".github/workflows/publish-charts.yaml"]
   workflow_dispatch:
 
 permissions:
   contents: read
   packages: write # push to ghcr.io
+
+concurrency:
+  group: publish-charts
+  cancel-in-progress: false # never race two pushes at the same registry path
 
 jobs:
   publish:
@@ -26,22 +34,23 @@ jobs:
           version: v4.2.3
 
       - name: log in to ghcr.io
-        run: helm registry login ghcr.io -u ${{ github.actor }} --password-stdin <<< "${{ secrets.GITHUB_TOKEN }}"
+        run: helm registry login ghcr.io -u '${{ github.actor }}' --password-stdin <<< '${{ secrets.GITHUB_TOKEN }}'
 
-      # Refuses to overwrite: an existing tag means the chart version was not bumped, which would silently
-      # change what every consumer already pins.
-      - name: package + push
+      - name: package + push each chart whose version is new
+        env:
+          REGISTRY: oci://ghcr.io/${{ github.repository_owner }}/charts
         run: |
-          fail=0
+          published=0
           for dir in charts/*/; do
             name="$(helm show chart "$dir" | awk '/^name:/{print $2}')"
             version="$(helm show chart "$dir" | awk '/^version:/{print $2}')"
-            if helm show chart "oci://ghcr.io/${{ github.repository_owner }}/charts/${name}" \
-                 --version "$version" >/dev/null 2>&1; then
-              echo "::error::${name} ${version} is already published; bump its Chart.yaml version"
-              fail=1; continue
+            if helm show chart "${REGISTRY}/${name}" --version "$version" >/dev/null 2>&1; then
+              echo "::notice::${name} ${version} already published, nothing to do"
+              continue
             fi
             helm package "$dir" -d /tmp/pkg
-            helm push "/tmp/pkg/${name}-${version}.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"
+            helm push "/tmp/pkg/${name}-${version}.tgz" "$REGISTRY"
+            echo "::notice::published ${name} ${version}"
+            published=$((published+1))
           done
-          exit $fail
+          echo "published ${published} chart(s)"

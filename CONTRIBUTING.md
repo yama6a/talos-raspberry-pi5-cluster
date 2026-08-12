@@ -66,12 +66,14 @@ before a comment block, so even a no-op write leaves the file dirty. `yq` is fin
 specific to this hardware and OS: nic-keeper selects `node.kubernetes.io/instance-type: rpi5` (stamped by `03c`
 from each node's inventory `type`), and coredns patches a Deployment Talos itself creates.
 
-They are published to `oci://ghcr.io/yama6a/charts` by `.github/workflows/publish-charts.yaml`, on a
-`charts-v*` tag. The platform repo consumes them as pinned upstream dependencies, so Argo CD still delivers and
-self-heals them.
+They are published to `oci://ghcr.io/yama6a/charts` by `.github/workflows/publish-charts.yaml`, on merge to
+`main`. It publishes a chart only when its version is not already in the registry, so unrelated commits are
+no-ops. There is no tag to cut and no GitHub Release: the registry is the distribution channel, and Renovate
+resolves updates from its tag list.
 
-**Their `version:` is NOT inert.** Unlike a wrapper chart, these are published artifacts: bump the chart version
-in the same PR that changes the chart, or the publish job rejects the push because the tag already exists.
+**Their `version:` is NOT inert.** Unlike a wrapper chart, these are published artifacts. Bump the version in
+the same PR that changes the chart: the `chart-version` CI job fails otherwise, because publish-charts would
+silently skip the change rather than overwrite a published version.
 
 ## The cross-layer exception
 

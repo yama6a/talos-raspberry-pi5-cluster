@@ -24,6 +24,7 @@
 - [Overview](#overview)
 - [Hardware](#hardware)
 - [Repository layout](#repository-layout)
+- [Published charts](#published-charts)
 - [Getting started](#getting-started)
 - [Where this repo stops](#where-this-repo-stops)
 - [Day-2 operations](#day-2-operations)
@@ -43,9 +44,9 @@
 - Config is three files: committed `versions.env` (the renovate-managed Talos + Kubernetes pins), plus gitignored
   `inventory.yaml` (your nodes) and `.env` (VIP, sizing, registry auth), each copied from a committed template.
   Nothing is hardcoded in a script.
-- Two Helm charts live here because they are hardware- and OS-specific, and are published to `ghcr.io` for the
-  platform repo to deliver: `nic-keeper` (the Pi 5 `macb` NIC agent) and `coredns` (scheduling constraints
-  patched onto the Deployment Talos owns).
+- Two Helm charts live here because they are hardware- and OS-specific: `nic-keeper` (the Pi 5 `macb` NIC
+  agent, the runtime half of what `03d` does at the machine-config level) and `coredns` (scheduling constraints
+  patched onto the Deployment Talos owns). See [Published charts](#published-charts).
 
 ## Hardware
 
@@ -119,6 +120,32 @@ kubectl get nodes                   # all present, all NotReady until a CNI land
 
 Instead of `make bootstrap-cluster` you can run the steps in runbook order. Every target maps to a script in
 `lib/shell/`; `make help` lists them all. Per-phase reasoning and verification is in [the docs](#documentation).
+
+## Published charts
+
+The two charts are published to GHCR on merge to `main`, and appear under this repo's **Packages** sidebar:
+
+```
+oci://ghcr.io/yama6a/charts/nic-keeper
+oci://ghcr.io/yama6a/charts/coredns
+```
+
+Consume one by pinning it as a dependency:
+
+```yaml
+# Chart.yaml
+dependencies:
+  - name: nic-keeper
+    version: "1.0.0"
+    repository: oci://ghcr.io/yama6a/charts
+```
+
+There is no GitHub Release for these: the registry is the distribution channel. Renovate picks up new versions
+from the registry's tag list with no extra configuration, because its `helmv3` manager reads `oci://`
+dependencies natively.
+
+Each chart's `version:` in its own `Chart.yaml` is the published artifact version, and CI fails a PR that edits
+a chart without bumping it.
 
 ## Where this repo stops
 
