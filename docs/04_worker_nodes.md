@@ -176,7 +176,7 @@ Announcing is independent of both role and backend placement: the service is `ex
 so whichever node answers the ARP forwards through the eBPF datapath to Envoy wherever it runs. Measured on the
 live cluster, the lease sat on `talos-cp2` while the only Envoy pod ran on `talos-cp3`, and the ingress served in
 ~100ms. So every node being a candidate is wanted: more of them means the lease survives more node losses. See
-[04_networking.md](04_networking.md).
+[https://github.com/yama6a/offgrid/blob/main/docs/01_networking.md](https://github.com/yama6a/offgrid/blob/main/docs/01_networking.md).
 
 **Node-count literals in alerts.** `cilium-health` compared the agent count against a literal `3`, which stops
 firing the moment a 4th node exists, because 3 of 4 agents up is still "at least 3". It now compares against

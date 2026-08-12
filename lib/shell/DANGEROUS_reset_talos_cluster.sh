@@ -9,17 +9,14 @@
 # Workers are reset first and must be back in maintenance before the control plane is touched. See the comment
 # on the ordering below; getting it wrong strands a worker with no API and costs a physical reflash.
 #
-# Run STANDALONE it ALSO tears down the S3 backups at the end (empty the bucket, then terraform destroy).
-# A rebuild sets REBUILD_IN_PROGRESS=1 and skips that: it keeps the bucket and IAM and only wipes contents.
+# Node state only. Off-cluster S3 backups are the platform repo's to tear down (`make s3-backup-destroy`
+# there); this script never touches them, so a reset is always recoverable from those backups.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"   # dockerized talosctl() (mounts CLUSTER_DIR) + the inventory node arrays
 
-# Spell out which of the two it is, so the operator knows exactly what is about to go.
-S3_CLAUSE=""
-[ "${REBUILD_IN_PROGRESS:-0}" != 1 ] && S3_CLAUSE=" AND DESTROY the S3 backup bucket + all its backups + IAM"
-confirm_word_always YES "Destroy ENTIRE Talos cluster AND wipe ALL Longhorn/PVC data (u-longhorn)${S3_CLAUSE}?" \
+confirm_word_always YES "Destroy ENTIRE Talos cluster AND wipe ALL Longhorn/PVC data (u-longhorn)?" \
   || { echo "skipped destruction (phew!)."; exit 0; }
 
 # ---- knobs ------------------------------------------------------------------
@@ -84,11 +81,3 @@ fi
 reset_group control-plane "${CP_IPS[@]}" \
   || { echo ">> one or more control-plane nodes failed to reset." >&2; exit 1; }
 say "all nodes reset -> maintenance."
-
-# Standalone reset only: a rebuild keeps the bucket and wipes the contents itself. No-ops cleanly with no
-# AWS creds. Best-effort, a teardown hiccup should not mask the node reset.
-if [ "${REBUILD_IN_PROGRESS:-0}" != 1 ]; then
-  say "tearing down the S3 backup bucket + IAM (empty + terraform destroy)"
-  ASSUME_YES=1 bash "${SCRIPT_DIR}/13_s3_backup_bucket.sh" destroy \
-    || echo ">> S3 teardown did not complete; run 'make s3-backup-destroy' by hand." >&2
-fi

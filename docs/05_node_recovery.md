@@ -4,7 +4,7 @@ What breaks when one of the three Pis goes away, what comes back on its own, and
 
 ## Losing a machine is uneventful; replacing one needs hands
 
-Every volume in this cluster is Longhorn's, not any one machine's ([08_storage.md](08_storage.md)). So a machine
+Every volume in this cluster is Longhorn's, not any one machine's ([https://github.com/yama6a/offgrid/blob/main/docs/05_storage.md](https://github.com/yama6a/offgrid/blob/main/docs/05_storage.md)). So a machine
 dying is a rescheduling problem, not a data problem: the pod reattaches its volume on a survivor and starts.
 Nothing to delete, nothing to restore.
 
@@ -31,7 +31,7 @@ wrong for us: our machines are in one room and a dead one is dead.
 `node.kubernetes.io/out-of-service:NoExecute` short-circuits it. The taint asserts the machine is genuinely
 gone, and on that assertion Kubernetes force-deletes its pods AND releases their volumes at once. Nothing applies
 it automatically, on purpose, because only an operator can make that call. `dead-node-watcher`
-(`argo_apps/platform/charts/02_dead_node_watcher`, wave 2) makes it, using time-NotReady as the evidence.
+([`dead-node-watcher`](https://github.com/yama6a/offgrid/blob/main/argo_apps/platform/charts/02_dead_node_watcher), wave 2, in the platform repo) makes it, using time-NotReady as the evidence.
 
 Timeline for a machine that dies: ~40s for Kubernetes to mark it NotReady, then the watcher's 60s grace, so a
 displaced pod is running on a survivor in about two minutes instead of six-plus.
@@ -342,7 +342,7 @@ first, so the instance you meant to move may not be the one that moves. Check
 `kubectl get pods -l cnpg.io/podRole=instance -A -L cnpg.io/instanceRole` before and after.
 
 The S3 catalog is still there, and still the answer for real data loss: a dropped table, a bad migration, or
-losing every replica of a volume at once. `make restore-cnpg`, detail in [13_backups.md](13_backups.md). It is
+losing every replica of a volume at once. `make restore-cnpg`, detail in [https://github.com/yama6a/offgrid/blob/main/docs/10_backups.md](https://github.com/yama6a/offgrid/blob/main/docs/10_backups.md). It is
 no longer part of node recovery.
 
 ### RabbitMQ
@@ -370,7 +370,7 @@ with divergent history rather than an empty log. Keeping the volume is what make
 ### Redis
 
 Nothing to do. Both persistence modes sit on Longhorn, so the volume follows the pod to a surviving node.
-A brief availability gap while it reschedules, which is the accepted trade-off in [12_redis.md](12_redis.md).
+A brief availability gap while it reschedules, which is the accepted trade-off in [https://github.com/yama6a/offgrid/blob/main/docs/09_redis.md](https://github.com/yama6a/offgrid/blob/main/docs/09_redis.md).
 
 ## Retiring a node for good
 
@@ -389,7 +389,7 @@ What this costs, on a 3-node cluster:
 - etcd drops to 2 members, which still needs 2 for quorum. No fault tolerance at all until you add a node.
 - Longhorn goes back to `healthy`: 2 replicas with hard anti-affinity fit exactly on 2 nodes, one each. What
   is gone is the spare. The next node failure leaves volumes `degraded` with nowhere to rebuild onto, which
-  is the situation the 2-replica choice exists to avoid ([08_storage.md](08_storage.md)).
+  is the situation the 2-replica choice exists to avoid ([https://github.com/yama6a/offgrid/blob/main/docs/05_storage.md](https://github.com/yama6a/offgrid/blob/main/docs/05_storage.md)).
 - `sample-user-manager-db` and RabbitMQ drop to 2 of 3 permanently, so they have no spare either. Both still
   serve; neither tolerates another loss.
 - The control-plane VIP fails over on its own, no action.
@@ -400,7 +400,7 @@ Two nodes is not a supported steady state here. Treat it as a countdown, not a c
 
 Detection is covered: `Node NotReady`, `CNPG instance not ready`, `RabbitMQ node down`, `Container stuck
 (crashloop)`, `StatefulSet has no ready replicas` and `Longhorn volume degraded` all fire on this scenario.
-See [09_monitoring.md](09_monitoring.md).
+See [https://github.com/yama6a/offgrid/blob/main/docs/06_monitoring.md](https://github.com/yama6a/offgrid/blob/main/docs/06_monitoring.md).
 
 | Layer | Self-heals a machine LOSS | Self-heals a machine REPLACEMENT |
 |---|---|---|

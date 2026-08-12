@@ -24,7 +24,7 @@ half-rack mount, NVMe-booted.
 - 3 nodes = odd etcd quorum, tolerates 1 failure. Adding a WORKER does not change that: it holds no etcd.
 - The 4th bay takes a worker, and it does not have to be a Pi. The node list carries a hardware type per node
   and picks the image from it, so an x86 box joins by the same two commands. See
-  [17_worker_nodes.md](17_worker_nodes.md).
+  [04_worker_nodes.md](04_worker_nodes.md).
 
 ## Rack mount: GeeekPi DP-0046 (10" 2U)
 

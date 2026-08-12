@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Puts ONE replaced or wiped node back into a running cluster, and fixes the state that does not fix itself.
-# The executable half of docs/15_node_recovery.md. The workloads need nothing: their volumes are Longhorn's,
+# The executable half of docs/05_node_recovery.md. The workloads need nothing: their volumes are Longhorn's,
 # not the node's, so they moved to a survivor on their own long before this runs.
 #
 # Re-run it as often as you like. Every step re-checks before acting, so a partial failure is recovered by
@@ -300,7 +300,7 @@ NEXT
 NEXT
 cat <<NEXT
 
-Then walk docs/15_node_recovery.md step 7 to confirm.
+Then walk docs/05_node_recovery.md step 7 to confirm.
 NEXT
 
 summary || exit 1

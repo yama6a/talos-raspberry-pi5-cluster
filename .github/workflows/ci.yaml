@@ -59,42 +59,19 @@ jobs:
         run: |
           curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
             | tar xz kubeconform && sudo mv kubeconform /usr/local/bin/
-      - name: add upstream helm repos
-        # helm dependency build needs classic (https) repos registered locally, exactly as ArgoCD's repo-server
-        # does. OCI deps need none. Derive them from every Chart.yaml so this never needs a hardcoded list.
-        run: |
-          find argo_apps lib/helm -name Chart.yaml -print0 \
-            | xargs -0 grep -hoE 'repository:[[:space:]]*"?https://[^" ]+' \
-            | sed -E 's/repository:[[:space:]]*"?//' | sort -u | while read -r url; do
-                helm repo add "r$(printf '%s' "$url" | cksum | cut -d' ' -f1)" "$url" >/dev/null 2>&1 || true
-              done
-      - name: helm dependency build
-        # Reproduces ArgoCD's repo-server: rebuilds charts/ from the COMMITTED Chart.lock, so a missing or stale
-        # lock fails here rather than on sync.
-        run: |
-          fail=0
-          while read -r c; do
-            grep -q '^dependencies:' "$c" || continue
-            dir="$(dirname "$c")"; echo "::group::dep-build $dir"
-            helm dependency build "$dir" || { echo "::error::dependency build failed: $dir"; fail=1; }
-            echo "::endgroup::"
-          done < <(find argo_apps lib/helm -name Chart.yaml)
-          exit $fail
       - name: helm lint + template + kubeconform
-        # The ArgoCD-delivered wrappers plus the two apps/ charts that render the Application manifests
-        # themselves. The lib/helm/ shared charts are validated transitively as their deps.
+        # Both charts render their own manifests and pin no upstream, so there is no dependency build.
         run: |
           fail=0
           schema='https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
-          while read -r c; do
-            dir="$(dirname "$c")"; echo "::group::$dir"
+          for dir in charts/*/; do
+            echo "::group::$dir"
             helm lint "$dir" || { echo "::error::helm lint failed: $dir"; fail=1; }
-            if ! helm template "$dir" --api-versions monitoring.coreos.com/v1 \
+            if ! helm template "$dir" \
                  | kubeconform -ignore-missing-schemas -summary \
                      -schema-location default -schema-location "$schema"; then
               echo "::error::template/kubeconform failed: $dir"; fail=1
             fi
             echo "::endgroup::"
-          done < <(find argo_apps \( -path '*/charts/*/Chart.yaml' -o -path '*/apps/Chart.yaml' \) \
-                     -not -path '*/charts/*/charts/*')
+          done
           exit $fail

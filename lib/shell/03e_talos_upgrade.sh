@@ -92,7 +92,7 @@ wait_replication_healthy() {
 # per node, so a graceful drain can only kill them; they come back after the reboot).
 # Do NOT shorten GRACEFUL_DRAIN_TIMEOUT below the time a CNPG switchover needs (~33s measured): the primary's
 # eviction is REFUSED by its own PDB until CNPG has handed over, so force-deleting it early turns a ~20s
-# switchover into a ~60s failover. See docs/15_node_recovery.md.
+# switchover into a ~60s failover. See docs/05_node_recovery.md.
 drain_node() {
   local node="$1"
   kubectl cordon "$node" >/dev/null

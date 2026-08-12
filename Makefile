@@ -1,7 +1,7 @@
 # A thin dispatcher over the numbered runbook scripts. Holds NO logic, versions or values: every target just
-# runs the step script it names, so `make install-cilium` and running lib/shell/04_cilium.sh by hand are
-# identical. `make help` lists everything; the one-shot orchestrators are bootstrap-cluster and
-# rebuild-cluster. The health targets need a live cluster and a populated .env.
+# runs the step script it names, so `make init-talos` and running lib/shell/03c_talos_cluster_config.sh by
+# hand are identical. `make help` lists everything. The health targets need a live cluster and a populated
+# .env. Everything that runs ON the cluster lives in the platform repo, not here.
 
 .DEFAULT_GOAL := help
 
@@ -11,12 +11,8 @@ help: ## Display this help.
 
 ##@ Cluster lifecycle  (DANGEROUS: destructive; each prompts for a typed confirmation)
 .PHONY: bootstrap-cluster
-bootstrap-cluster: ## DANGER: first-time init of freshly-flashed nodes -> full cluster (archives old creds).
+bootstrap-cluster: ## DANGER: first-time init of freshly-flashed nodes -> configured cluster + kubeconfig (archives old creds).
 	bash lib/shell/DANGEROUS_bootstrap_cluster.sh
-
-.PHONY: rebuild-cluster
-rebuild-cluster: ## DANGER: wipe a RUNNING cluster and rebuild end-to-end (restores the sealed-secrets key).
-	bash lib/shell/DANGEROUS_rebuild_cluster.sh
 
 .PHONY: reset-cluster
 reset-cluster: ## DANGER: wipe all nodes (STATE + EPHEMERAL + Longhorn) back to maintenance.
@@ -65,103 +61,11 @@ rebalance-workloads: ## 03g: rolling-restart the stateless Deployments so the sc
 	bash lib/shell/03g_rebalance_workloads.sh
 
 .PHONY: recover-node
-recover-node: ## 15: rejoin ONE wiped/replaced node and fix what does not self-heal. NODE=<hostname>, add YES=1 to skip the prompt.
+recover-node: ## 05: rejoin ONE wiped/replaced node and fix what does not self-heal. NODE=<hostname>, add YES=1 to skip the prompt.
 	@test -n "$(NODE)" || { echo "usage: make recover-node NODE=talos-cp3 [YES=1]"; exit 1; }
 	bash lib/shell/recover_node.sh $(NODE) $(if $(YES),--yes,)
 
-##@ Cluster delivery  (step 04-09; native helm/kubectl)
-.PHONY: install-cilium
-install-cilium: ## 04: install/upgrade the Cilium CNI (+ monitoring CRDs, LB-IPAM/L2, Hubble).
-	bash lib/shell/04_cilium.sh
-
-.PHONY: install-argocd
-install-argocd: ## 05: bootstrap ArgoCD; it then delivers the whole platform from git.
-	bash lib/shell/05_argocd.sh
-
-.PHONY: configure-argocd-webhook
-configure-argocd-webhook: ## 08: generate+seal the ArgoCD GitHub webhook secret (-> secrets/) + set poll cadence from .env.
-	bash lib/shell/08_argocd_webhook.sh
-
-.PHONY: configure-values
-configure-values: ## 07: write every per-deployment value (repo URL, domains, SSO allowlist, ingress IP, ACME, scrape endpoints) from .env + inventory.yaml into the chart values (pure yq, no cluster).
-	bash lib/shell/07_values.sh
-
-.PHONY: configure-cloudflare-token
-configure-cloudflare-token: ## 07: seal the Cloudflare DNS-01 API token into cert-manager (needs the sealed-secrets controller + .env token).
-	bash lib/shell/07_cloudflare_token.sh
-
-.PHONY: configure-sso
-configure-sso: ## 07: write the SSO clientID + seal the OAuth client secret (needs .env creds).
-	bash lib/shell/07_google_sso.sh
-
-.PHONY: configure-ntfy-auth
-configure-ntfy-auth: ## 10: seed ntfy users/ACLs + seal Grafana's ntfy write token (needs 05_ntfy synced + .env secret).
-	bash lib/shell/10_ntfy_auth.sh
-
-##@ Backups  (step 13-17; S3 bucket via Terraform + CNPG WAL/base + Redis RDB + Longhorn volume + VM/VL export backups)
-.PHONY: s3-backup-bucket
-s3-backup-bucket: ## 13: create/update the shared S3 backup bucket + scoped IAM writer (Terraform; needs .env AWS creds).
-	bash lib/shell/13_s3_backup_bucket.sh
-
-.PHONY: s3-backup-wipe
-s3-backup-wipe: ## 13: DANGER delete ALL backups in the bucket, keeping the bucket + IAM (typed confirm).
-	bash lib/shell/13_s3_backup_bucket.sh wipe
-
-.PHONY: s3-backup-destroy
-s3-backup-destroy: ## 13: DANGER empty the bucket AND terraform-destroy it + the IAM writer (typed confirm).
-	bash lib/shell/13_s3_backup_bucket.sh destroy
-
-.PHONY: configure-cnpg-backup
-configure-cnpg-backup: ## 14: enable CNPG S3 backups: seal the writer creds + write bucket/region/RPO into pg-cluster.
-	bash lib/shell/14_cnpg_backup.sh
-
-.PHONY: configure-redis-backup
-configure-redis-backup: ## 15: enable Redis RDB S3 backups: seal the writer creds + write bucket/region into 07_redis_backup.
-	bash lib/shell/15_redis_backup.sh
-
-.PHONY: configure-longhorn-backup
-configure-longhorn-backup: ## 16: enable Longhorn volume S3 backups: seal the writer creds + write the backup target into 02_longhorn.
-	bash lib/shell/16_longhorn_backup.sh
-
-.PHONY: configure-vm-backup
-configure-vm-backup: ## 17: enable VictoriaMetrics/Logs S3 export backups: seal the writer creds + write bucket/region into 08_vm_backup.
-	bash lib/shell/17_vm_backup.sh
-
-##@ Secrets  (sealed-secrets master key)
-.PHONY: backup-secrets-key
-backup-secrets-key: ## 06: back up the sealed-secrets master key (do this BEFORE a rebuild).
-	bash lib/shell/06_backup_sealed_secrets_key.sh
-
-.PHONY: restore-secrets-key
-restore-secrets-key: ## 06: restore the sealed-secrets master key so committed SealedSecrets decrypt.
-	bash lib/shell/06_restore_sealed_secrets_key.sh
-
-##@ Data recovery  (restore from S3: CNPG + Redis + Longhorn + VM/VL. A GitOps-pruned CNPG cluster is not deleted; just restore its files.)
-.PHONY: restore-cnpg
-restore-cnpg: ## Restore a CNPG database from S3, latest or PITR: in-place under its own name, or into a throwaway side cluster (interactive, resumable).
-	bash lib/shell/recover_cnpg_from_s3.sh
-
-.PHONY: restore-redis
-restore-redis: ## Restore a Redis instance from its S3 RDB dump: pick a dump, replay in-place via a seed pod + replication (interactive, destructive).
-	bash lib/shell/recover_redis_from_s3.sh
-
-.PHONY: restore-longhorn
-restore-longhorn: ## Restore a Longhorn volume from S3 into a new Volume + PV/PVC (interactive; needs backups on).
-	bash lib/shell/recover_longhorn_from_s3.sh
-
-.PHONY: restore-vm
-restore-vm: ## Restore VictoriaMetrics/Logs from an S3 export: stream it into the live store via a temp pod (interactive; needs backups on).
-	bash lib/shell/recover_vm_from_s3.sh
-
-.PHONY: fix-chart-locks
-fix-chart-locks: ## Regenerate any stale Chart.lock (out of sync with Chart.yaml) across all charts; no git.
-	bash lib/shell/fix_chart_locks.sh
-
 ##@ Health & inspection  (read-only; use the dockerized talosctl + the 03c kubeconfig)
-.PHONY: check-multiarch
-check-multiarch: ## Check every running image has a manifest for every architecture in the cluster. ARCH="amd64" to check before adding such a node.
-	bash lib/shell/check_multiarch.sh
-
 .PHONY: check-health
 check-health: ## Talos: wait for and report overall cluster health.
 	@bash -c 'source lib/shell/common.sh && talosctl health'
@@ -173,40 +77,6 @@ talosctl: ## Run dockerized talosctl, e.g. `make talosctl get members`. Any FLAG
 .PHONY: print-kubeconfig
 print-kubeconfig: ## Print the 03c kubeconfig export line (eval it to point your kubectl at the cluster).
 	@bash -c 'source lib/shell/common.sh && echo "export KUBECONFIG=$$CLUSTER_DIR/kubeconfig"'
-
-.PHONY: view-credentials
-view-credentials: ## Print login URLs + credentials (RabbitMQ, ntfy phone, GitHub webhook) and the SSO-only UI URLs.
-	bash lib/shell/view_credentials.sh
-
-.PHONY: krr
-krr: ## Rightsizing: dockerized KRR vs vmsingle (port-forward); prints request->recommended per workload (table).
-	bash lib/shell/krr.sh
-
-.PHONY: krr-json
-krr-json: ## Rightsizing: same as `krr` but emits JSON.
-	bash lib/shell/krr.sh -f json
-
-.PHONY: krr-yaml
-krr-yaml: ## Rightsizing: same as `krr` but emits YAML.
-	bash lib/shell/krr.sh -f yaml
-
-##@ Benchmarks  (NOT read-only: create a throwaway namespace and load the live cluster for hours)
-
-.PHONY: storage-bench
-storage-bench: ## Measure write latency of Longhorn r2 with a local replica vs both over the network; prints p50/p95/p99.
-	bash lib/shell/storage_bench.sh run
-
-.PHONY: storage-bench-fio
-storage-bench-fio: ## Same, fio fsync only: the fast (~1h) read on the question, no CNPG or RabbitMQ.
-	bash lib/shell/storage_bench.sh run --workload fio
-
-.PHONY: storage-bench-sync
-storage-bench-sync: ## What SYNCHRONOUS replication costs CNPG on longhorn r2 (~45min): the price of highAvailability.
-	bash lib/shell/storage_bench.sh run --workload pgsync --repeats 2
-
-.PHONY: storage-bench-teardown
-storage-bench-teardown: ## Remove everything the benchmark created (namespace, bench StorageClasses, node tags, operator CNP).
-	bash lib/shell/storage_bench.sh teardown
 
 # Words after `make talosctl ...` (get, members, services, ...) are extra goals to Make; this no-op catch-all
 # swallows them so they're passed to talosctl instead of erroring. Explicit targets above still take priority,

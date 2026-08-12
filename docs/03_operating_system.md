@@ -6,7 +6,7 @@ Talos has no official Pi 5 image, so the node image is built separately, in
 
 The node list lives in `inventory.yaml`, one entry per node carrying its role, hardware type and image source.
 This doc covers the three Pi 5 control-plane nodes; what differs for a worker, or for a node type with no custom
-build, is [17_worker_nodes.md](17_worker_nodes.md). Two consequences to know here: `03c` iterates the whole
+build, is [04_worker_nodes.md](04_worker_nodes.md). Two consequences to know here: `03c` iterates the whole
 inventory and applies a control-plane or worker config per node, and `03e` resolves the installer image per node
 rather than using one for the cluster, so a mixed-hardware cluster cannot be handed one architecture's image.
 
@@ -217,7 +217,7 @@ Drop that in `~/.zshrc` or `~/.bash_profile`, reload, and `talosctl` works norma
 ## Cluster bring-up
 
 Per-node identity (hostname, role) is applied now via `talosctl`. The CNI is disabled at the Talos layer (`cni: none`)
-and kube-proxy is off (`proxy.disabled: true`), both replaced by Cilium in [step 04](04_networking.md). All three nodes
+and kube-proxy is off (`proxy.disabled: true`), both replaced by Cilium in [step 04](https://github.com/yama6a/offgrid/blob/main/docs/01_networking.md). All three nodes
 are control-plane and schedulable. Nodes come up NotReady until Cilium lands, that's expected, not a fault.
 
 > The cluster name, VIP, and the node list (hostname + IP per node) live in `.env`; the install disk + NIC are fixed
@@ -278,7 +278,7 @@ so I picked `192.168.100.1` for the VIP (inside the subnet, outside the DHCP ran
 4. Appends the partition layout: `EPHEMERAL` capped (default 64 GiB) + a `longhorn` user volume taking the whole
    rest of the NVMe (`/var/mnt/longhorn`, no `maxSize`, so it claims what is left once at provision time). That
    path also gets a `kubelet.extraMounts` bind so the containerized kubelet can see it. Sits empty until
-   [Longhorn](08_storage.md) syncs (step 04+).
+   [Longhorn](https://github.com/yama6a/offgrid/blob/main/docs/05_storage.md) syncs (step 04+).
 5. `apply-config` to each node, with a per-NODE patch on top of the per-ROLE one: `machine.install.image` from
    `installer_ref_for` (so each hardware type gets the installer it is built from) and the node label
    `node.kubernetes.io/instance-type=<type>` from its inventory `type`, which is what the `nic-keeper` DaemonSet
@@ -352,10 +352,10 @@ Once the cluster is up (nodes NotReady, no CNI yet), in order:
    `03d_nic_hardening.sh`, see [NIC hardening](#nic-hardening-the-macb-wedge). Run before Cilium, so the NIC is
    hardened ahead of the network-heavy CNI rollout.
 2. Cilium: CNI + LoadBalancer + gateway + WireGuard encryption; this is what flips the nodes to Ready. Done
-   by `04_cilium.sh` (step 04), decision basis + detail in [04_networking.md](04_networking.md). The one
+   by `04_cilium.sh` (step 04), decision basis + detail in [https://github.com/yama6a/offgrid/blob/main/docs/01_networking.md](https://github.com/yama6a/offgrid/blob/main/docs/01_networking.md). The one
    imperative install; everything after it is GitOps.
 3. ArgoCD: done by `05_argocd.sh` (step 05); it self-manages, then adopts Cilium, and everything below
-   becomes declarative. See [05_gitops.md](05_gitops.md).
+   becomes declarative. See [https://github.com/yama6a/offgrid/blob/main/docs/02_gitops.md](https://github.com/yama6a/offgrid/blob/main/docs/02_gitops.md).
 4. NIC recovery DaemonSet (`nic-keeper`: EEE-off + link-watchdog + `ss -K`): GitOps (ArgoCD), runs at
    sync-wave 2. See [Runtime: the recovery DaemonSet](#runtime-the-recovery-daemonset-nic-keeper-gitops) below.
 5. etcd snapshot schedule.
@@ -427,9 +427,9 @@ means the VIP/API didn't steady within `SETTLE_WAIT`, let the NIC/control-plane 
 The wedge itself is assumed tolerable, so runtime recovery lives in GitOps (ArgoCD), not
 machine-config: the three triggers below have no `EthernetConfig` field and need a live agent.
 That agent is `nic-keeper`, one DaemonSet pod per rpi5 node (namespace `kube-system`,
-hostNetwork), delivered by ArgoCD ([05_gitops.md](05_gitops.md)) at sync-wave 2. No imperative
-step. Chart: `argo_apps/platform/charts/02_nic_keeper/`; Application:
-`argo_apps/platform/apps/templates/02_nic_keeper.yaml`.
+hostNetwork), delivered by ArgoCD ([https://github.com/yama6a/offgrid/blob/main/docs/02_gitops.md](https://github.com/yama6a/offgrid/blob/main/docs/02_gitops.md)) at sync-wave 2. No imperative
+step. Chart: `charts/nic-keeper/` here, published to `ghcr.io`; the Application that delivers it is
+[`02_nic_keeper.yaml`](https://github.com/yama6a/offgrid/blob/main/argo_apps/platform/apps/templates/02_nic_keeper.yaml) in the platform repo.
 
 The three runtime `macb` failure modes machine-config can't reach (the other two are `03d`'s, see
 the [table above](#nic-hardening-the-macb-wedge)):
@@ -522,6 +522,31 @@ A recovery, in the affected node's pod logs:
 - Image: the recent kernel that makes EEE controllable comes from the image repo; the EEE
   step itself is in the deferred DaemonSet, not the image.
 
+## CoreDNS placement
+
+Talos ships coredns with a `preferred` hostname anti-affinity, which the scheduler is free to ignore. On a fresh
+cluster it does: every node is empty when coredns first schedules, so nothing outweighs the preference and both
+replicas can land on one node. That node then owns all cluster DNS.
+
+`cluster.coreDNS` in the Talos machine config takes `image` and `disabled`, nothing else, so there is no way to
+express this in the config that creates the Deployment. Instead the `coredns` chart in this repo, delivered as a wave-0 app by the platform repo,
+server-side-applies a
+partial Deployment carrying only `requiredDuringSchedulingIgnoredDuringExecution`.
+
+- Talos owns the Deployment via its own server-side apply, but only ever sets the `preferred` sibling key. An
+  applier does not strip fields it never owned, so the two coexist. Re-check after a Talos MINOR upgrade.
+- `ServerSideApply=true` is required, not tuning: a client-side apply of a partial Deployment strips every field
+  Talos owns. `ServerSideDiff=true` goes with it, or Argo diffs against the whole live object and stays OutOfSync
+  forever over fields it never sent.
+- The manifest carries `Prune=false,Delete=false`. Every app here has the `resources-finalizer`, so without it,
+  deleting or renaming the app cascade-deletes coredns.
+- Price of `required` over `preferred`: at 2 replicas, one stays Pending if only a single node is schedulable.
+  Fine at 3 nodes, 03e's one-at-a-time drain included. A 2-node cluster would deadlock the rolling update.
+- Nothing enforces this during bootstrap: Argo does not exist until the platform repo runs, and coredns
+  first schedules as soon as the CNI lands.
+  Both replicas may share a node for those few minutes, then reschedule when wave 0 syncs. The rollout is
+  surge-first (`maxUnavailable` rounds to 0 at 2 replicas), so DNS does not dip.
+
 ## Troubleshooting
 
 Image build:
@@ -542,10 +567,10 @@ Boot:
   `ttyAMA10`) to see what's happening.
 - Won't boot at all -> EEPROM boot order / `PCIE_PROBE` (step 02).
 - NVMe not detected -> PCIe probe / `dtparam`; confirm Gen 2 link with step 02's checks.
-- Node is gone for good and needs replacing -> [15_node_recovery.md](15_node_recovery.md). Do NOT re-run `03c`
+- Node is gone for good and needs replacing -> [05_node_recovery.md](05_node_recovery.md). Do NOT re-run `03c`
   as-is: it ends by bootstrapping etcd, which is for creating a cluster, not rejoining one.
 
-(Cilium / networking troubleshooting lives in [04_networking.md](04_networking.md).)
+(Cilium / networking troubleshooting lives in [https://github.com/yama6a/offgrid/blob/main/docs/01_networking.md](https://github.com/yama6a/offgrid/blob/main/docs/01_networking.md).)
 
 ## Reference
 

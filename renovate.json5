@@ -1,12 +1,10 @@
 {
   // Opens dependency-update PRs for every pin in the repo. Which manager owns what:
-  //   helmv3          chart deps (Chart.yaml + Chart.lock)
-  //   helm-values     container images in values.yaml
-  //   terraform       the aws provider (versions.tf + .terraform.lock.hcl)
+  //   helm-values     container images in the two published charts' values.yaml
   //   github-actions  the renovate workflow's own action pins
   //   customManagers  images in chart templates + shell scripts, and the versions.env pins
   // Cadence is the cron in .github/workflows/renovate.yaml, not an internal `schedule`, so a manual
-  // workflow_dispatch works too. Docs: docs/14_renovate.md.
+  // workflow_dispatch works too. Docs: docs/06_renovate.md.
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   extends: [
     "config:recommended",
@@ -23,17 +21,9 @@
   // rather than weekly. platformAutomerge stays false to keep the merge on Renovate's side.
   platformAutomerge: false,
 
-  // helmv3 auto-discovers every Chart.yaml and refreshes each wrapper's Chart.lock on a bump. file:// deps
-  // have no datasource, so Renovate skips them.
-  // helmUpdateSubChartArchives re-packs a vendored charts/*.tgz. No chart commits one today, so it does
-  // nothing; kept as a guard in case one is reintroduced.
-  // Do NOT add a "**/charts/**" disable rule: the wrapper charts themselves live under paths containing
-  // /charts/, so that would disable the whole repo.
-  postUpdateOptions: ["helmUpdateSubChartArchives"],
+  // The two charts here pin no upstream: they render their own manifests, so helmv3 has nothing to resolve.
+  // Their container images are handled by helm-values and the customManager below.
 
-  // Bumping this file re-vendors an upstream release manifest verbatim, per its README curl recipe. Never
-  // let a bot patch the image tag inside it.
-  ignorePaths: ["argo_apps/platform/charts/03_barman_cloud_plugin/templates/**"],
 
   customManagers: [
     {
@@ -46,40 +36,14 @@
       managerFilePatterns: [
         "/^versions\\.env$/",
         "/^lib/shell/.*\\.sh$/",
-        "/^lib/helm/redis-instance/templates/redis\\.yaml$/", // the redis-exporter ref (the server tag is now per-workload)
-        "/^argo_apps/platform/charts/07_redis_backup/templates/cronjob\\.yaml$/", // alpine/k8s + opstree-redis refs
+        "/^charts/.*/templates/.*\\.yaml$/",
       ],
       matchStrings: [
         "# renovate: datasource=docker(?: versioning=(?<versioning>\\S+))?\\s+[^\\n]*?(?<depName>[a-z0-9][a-z0-9._/-]+):(?<currentValue>[\\w][\\w.-]*)(?:@(?<currentDigest>sha256:[a-f0-9]{64}))?",
       ],
       datasourceTemplate: "docker",
     },
-    {
-      // A bare postgresVersion/redisVersion scalar in a workload's values.yaml, with the repo named in the
-      // depName= annotation because the tag alone has no repo. redisVersion tracks every update type;
-      // postgresVersion is held to MAJOR-only by a packageRule below, so only a PG major (18 to 19) surfaces,
-      // as its own reviewed PR.
-      customType: "regex",
-      description: "per-workload datastore image tags (annotated postgresVersion/redisVersion in workload values.yaml)",
-      managerFilePatterns: ["/^argo_apps/workloads/charts/[^/]+/values\\.yaml$/"],
-      matchStrings: [
-        "# renovate: datasource=docker depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?\\s+(?:postgresVersion|redisVersion):\\s*\"?(?<currentValue>[\\w][\\w.-]*)\"?",
-      ],
-      datasourceTemplate: "docker",
-    },
-    {
-      // pg-cluster's supported Postgres image map: one pinned <repo>:<tag>@<digest> per major. Digest-only,
-      // per the packageRule below, so Renovate just refreshes each digest as the rolling tag moves.
-      // Adding or removing a major is a manual edit: a new PG major is a pg_upgrade, not a digest swap.
-      customType: "regex",
-      description: "pg-cluster supported Postgres images (tag@digest per major)",
-      managerFilePatterns: ["/^lib/helm/pg-cluster/files/postgres-images\\.yaml$/"],
-      matchStrings: [
-        "(?<depName>ghcr\\.io/cloudnative-pg/postgresql):(?<currentValue>[\\w][\\w.-]*)@(?<currentDigest>sha256:[a-f0-9]{64})",
-      ],
-      datasourceTemplate: "docker",
-    },
-    {
+            {
       // Scalar vars in versions.env carrying a full `# renovate:` annotation. TALOS_IMAGE_RELEASE's
       // annotation also carries a `versioning=regex:...`, because its `-<build revision>` suffix would
       // otherwise read as a semver prerelease and be skipped as unstable.
@@ -95,11 +59,9 @@
   packageRules: [
     {
       // ONE combined, auto-merged PR for every NON-major update, gated on the required CI checks.
-      // WARNING: a merged bump reaches the LIVE cluster unattended via ArgoCD self-heal, including Cilium,
-      // which can cut the cluster off its own network. It also bumps TALOS_IMAGE_RELEASE, which a merge does
-      // NOT apply: that still needs
-      // 03e (and 03a for a reflash). Accepted for a hands-off homelab; to de-risk, add minimumReleaseAge or
-      // drop automerge from the deps you want to gate.
+      // Nothing here applies itself: a merged bump only changes a pinned string. TALOS_IMAGE_RELEASE and
+      // KUBERNETES_VERSION take effect when 03e/03f run, and a fresh drive needs 03a. To de-risk anyway, add
+      // minimumReleaseAge or drop automerge from the deps you want to gate.
       description: "combine all non-major updates into one auto-merged PR",
       matchUpdateTypes: ["minor", "patch", "digest", "pin", "lockFileMaintenance"],
       groupName: "all non-major dependencies",
@@ -126,25 +88,6 @@
       description: "pin github action refs to digests",
       matchManagers: ["github-actions"],
       pinDigests: true,
-    },
-    {
-      // postgresVersion is a MAJOR selector only, a key into pg-cluster's image map, where the actual patch
-      // and digest are pinned. Disabling patch/minor/digest here keeps the workload scalar from churning, so
-      // only a MAJOR bump surfaces, as its own reviewed PR. That PR fails CI until the matching major is
-      // added to files/postgres-images.yaml, which is the deliberate pg_upgrade gate.
-      description: "workload postgresVersion: major-only (patch/minor come from the pg-cluster image map)",
-      matchFileNames: ["argo_apps/workloads/charts/**/values.yaml"],
-      matchDepNames: ["ghcr.io/cloudnative-pg/postgresql"],
-      matchUpdateTypes: ["minor", "patch", "digest"],
-      enabled: false,
-    },
-    {
-      // The image map is DIGEST-ONLY: each line stays on its major's rolling tag forever and Renovate just
-      // refreshes the digest. Disabling tag bumps is what stops 18-minimal-trixie being rewritten to a 19 tag.
-      description: "pg-cluster image map: digest-only, no tag version bumps",
-      matchFileNames: ["lib/helm/pg-cluster/files/postgres-images.yaml"],
-      matchUpdateTypes: ["major", "minor", "patch"],
-      enabled: false,
-    },
+    }
   ],
 }

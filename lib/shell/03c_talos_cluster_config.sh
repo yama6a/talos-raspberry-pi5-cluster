@@ -146,7 +146,7 @@ ${REGISTRIES_BLOCK}
   kubelet:
     # Talos runs the kubelet in a container and does NOT auto-propagate /var/mnt mounts into it, so without
     # this bind Longhorn's pods cannot see their disk. rshared means mounts made inside the bind are visible
-    # on the host too, which Longhorn needs: it creates one sub-mount per replica. See 08_storage.md.
+    # on the host too, which Longhorn needs: it creates one sub-mount per replica. See https://github.com/yama6a/offgrid/blob/main/docs/05_storage.md.
     extraMounts:
       - destination: /var/mnt/longhorn
         type: bind
@@ -179,7 +179,7 @@ cluster:
   apiServer:
     # Talos audit-logs at Metadata for EVERYTHING by default, which is ~1GB a day per node, mostly leader-election
     # leases and controller reads. Narrowed to writes of real objects, which is ~1.5% of that and is the part
-    # worth keeping: who created, changed or deleted what. The collector ships it, see 09_monitoring.md.
+    # worth keeping: who created, changed or deleted what. The collector ships it, see https://github.com/yama6a/offgrid/blob/main/docs/06_monitoring.md.
     auditPolicy:
       apiVersion: audit.k8s.io/v1
       kind: Policy
@@ -211,7 +211,7 @@ machine:
 ${REGISTRIES_BLOCK}
   kubelet:
     # Same bind as the control plane: Longhorn runs on every node that carries a disk, and the kubelet cannot
-    # see /var/mnt without it. See 08_storage.md.
+    # see /var/mnt without it. See https://github.com/yama6a/offgrid/blob/main/docs/05_storage.md.
     extraMounts:
       - destination: /var/mnt/longhorn
         type: bind
@@ -225,7 +225,7 @@ EOF
 fi
 
 # Cap EPHEMERAL, then let 'longhorn' take the whole remainder: no maxSize, so it claims what is left, once,
-# at provision time. See 08_storage.md.
+# at provision time. See https://github.com/yama6a/offgrid/blob/main/docs/05_storage.md.
 cat > "${TALOS_SCRATCH}/volumes.yaml" <<EOF
 ---
 apiVersion: v1alpha1
