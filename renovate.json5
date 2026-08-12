@@ -32,7 +32,7 @@
       // helm-values or the manager below instead, to avoid double-managing.
       // Captures repo:tag(+digest) from the ref itself, so tag AND digest stay fresh.
       customType: "regex",
-      description: "docker image refs (annotated) in chart templates, shell scripts, versions.env",
+      description: "docker image refs (annotated) in chart templates, shell scripts and versions.env",
       managerFilePatterns: [
         "/^versions\\.env$/",
         "/^lib/shell/.*\\.sh$/",
@@ -66,15 +66,6 @@
       matchUpdateTypes: ["minor", "patch", "digest", "pin", "lockFileMaintenance"],
       groupName: "all non-major dependencies",
       automerge: true,
-    },
-    // MAJOR updates get their own PR each, which is Renovate's default, so no rule below does it. That keeps a
-    // breaking bump reviewed in isolation. The VictoriaMetrics charts are the exception: their CRDs must match
-    // the operator, so their majors stay in one PR.
-    {
-      description: "keep VictoriaMetrics majors together (CRDs must match the operator)",
-      matchPackageNames: ["victoria-metrics-operator", "victoria-metrics-operator-crds", "victoria-metrics-k8s-stack", "victoria-logs-collector"],
-      matchUpdateTypes: ["major"],
-      groupName: "victoriametrics stack (major)",
     },
     {
       // k8s release tags are v-prefixed and the versions.env value is not, so strip the v when comparing.
