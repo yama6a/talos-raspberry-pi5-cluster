@@ -1,5 +1,0 @@
-apiVersion: v2
-name: nic-keeper
-description: Per-node DaemonSet that mitigates the Raspberry Pi 5 macb NIC wedge at runtime. 03d is the machine-config half.
-type: application
-version: 1.0.0 # PUBLISHED to ghcr.io: bump in the same PR that changes this chart, or the push is rejected

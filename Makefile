@@ -1,7 +1,7 @@
 # A thin dispatcher over the numbered runbook scripts. Holds NO logic, versions or values: every target just
 # runs the step script it names, so `make init-talos` and running lib/shell/03c_talos_cluster_config.sh by
 # hand are identical. `make help` lists everything. The health targets need a live cluster and a populated
-# .env. Everything that runs ON the cluster lives in the platform repo, not here.
+# .env. This repo stops at a configured cluster and a kubeconfig; nothing that runs ON it lives here.
 
 .DEFAULT_GOAL := help
 
@@ -15,7 +15,7 @@ bootstrap-cluster: ## DANGER: first-time init of freshly-flashed nodes -> config
 	bash lib/shell/DANGEROUS_bootstrap_cluster.sh
 
 .PHONY: reset-cluster
-reset-cluster: ## DANGER: wipe all nodes (STATE + EPHEMERAL + Longhorn) back to maintenance.
+reset-cluster: ## DANGER: wipe all nodes (STATE + EPHEMERAL + the storage volume) back to maintenance.
 	bash lib/shell/DANGEROUS_reset_talos_cluster.sh
 
 ##@ Node image & Talos bring-up  (step 02-03; the talos steps run their tooling in Docker)
@@ -45,7 +45,7 @@ reapply-talos-config: ## 03c: push a changed machine config to nodes that are al
 	bash lib/shell/03c_talos_cluster_config.sh --reapply $(NODE)
 
 .PHONY: harden-nics
-harden-nics: ## 03d: apply NIC hardening (disable EEE / watchdog) to every node.
+harden-nics: ## 03d: NIC hardening for every node: machine config (offloads/rings/watchdog) + the nic-keeper DaemonSet.
 	bash lib/shell/03d_nic_hardening.sh
 
 .PHONY: upgrade-talos
@@ -65,6 +65,15 @@ recover-node: ## 05: rejoin ONE wiped/replaced node and fix what does not self-h
 	@test -n "$(NODE)" || { echo "usage: make recover-node NODE=talos-cp3 [YES=1]"; exit 1; }
 	bash lib/shell/recover_node.sh $(NODE) $(if $(YES),--yes,)
 
+##@ Kubeconfig  (point your kubectl at the cluster; merge-kubeconfig is the handover out of this repo)
+.PHONY: merge-kubeconfig
+merge-kubeconfig: ## Merge the 03c kubeconfig into ~/.kube/config and make it the active context (timestamped backup).
+	bash lib/shell/merge_kubeconfig.sh
+
+.PHONY: print-kubeconfig
+print-kubeconfig: ## Print the 03c kubeconfig export line, for pointing ONE shell at the cluster without touching ~/.kube/config.
+	@bash -c 'source lib/shell/common.sh && echo "export KUBECONFIG=$$CLUSTER_DIR/kubeconfig"'
+
 ##@ Health & inspection  (read-only; use the dockerized talosctl + the 03c kubeconfig)
 .PHONY: check-health
 check-health: ## Talos: wait for and report overall cluster health.
@@ -73,10 +82,6 @@ check-health: ## Talos: wait for and report overall cluster health.
 .PHONY: talosctl
 talosctl: ## Run dockerized talosctl, e.g. `make talosctl get members`. Any FLAG needs a `--` first: `make talosctl -- -n <ip> etcd members`.
 	@bash -c 'source lib/shell/common.sh && talosctl $(filter-out $@,$(MAKECMDGOALS))'
-
-.PHONY: print-kubeconfig
-print-kubeconfig: ## Print the 03c kubeconfig export line (eval it to point your kubectl at the cluster).
-	@bash -c 'source lib/shell/common.sh && echo "export KUBECONFIG=$$CLUSTER_DIR/kubeconfig"'
 
 # Words after `make talosctl ...` (get, members, services, ...) are extra goals to Make; this no-op catch-all
 # swallows them so they're passed to talosctl instead of erroring. Explicit targets above still take priority,

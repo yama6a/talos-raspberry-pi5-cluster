@@ -7,7 +7,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 
 # ---- knobs ------------------------------------------------------------------
-SKIP_NAMESPACES="longhorn-system envoy-gateway-system"  # CSI sidecars mid-volume-op; the ingress data plane
+# Namespaces to leave alone come from REBALANCE_SKIP_NAMESPACES in .env, because which ones must not be
+# restarted depends on what the cluster runs, not on the hardware. Typically the CSI driver's namespace (its
+# sidecars may be mid-volume-op) and the ingress data plane.
+SKIP_NAMESPACES="$REBALANCE_SKIP_NAMESPACES"
 ROLLOUT_TIMEOUT=300   # secs per Deployment; restarts are serial, maxSurge doubles pods and 3 Pi 5s are RAM-tight
 
 require kubectl

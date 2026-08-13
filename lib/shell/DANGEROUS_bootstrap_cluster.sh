@@ -9,11 +9,11 @@
 #   2. 03b_talos_boot_verify.sh     : deep per-node verify, a hard gate BEFORE we archive creds or mint PKI
 #   3. archive local creds          : move the old secrets into secrets/backup_<ts>/ so 03c mints a NEW PKI
 #   4. 03c_talos_cluster_config.sh  : generate fresh config, apply, bootstrap etcd, write kube/talosconfig
-#   5. 03d_nic_hardening.sh         : NIC hardening
+#   5. 03d_nic_hardening.sh         : NIC hardening, machine config + the nic-keeper DaemonSet
 #
-# Ends with a cluster whose nodes are configured and etcd bootstrapped, and a kubeconfig in secrets/. The
-# nodes stay NotReady until a CNI lands, which is the first thing the platform repo does. See the handoff
-# printed at the end.
+# Ends with a cluster whose nodes are configured and etcd bootstrapped, and a kubeconfig in secrets/. Under
+# the default DISABLE_FLANNEL_AND_KUBE_PROXY=true the nodes stay NotReady until a CNI is installed, which is
+# where this repo stops.
 #
 # Every step aborts on the first failure with a resume hint.
 # Archiving secrets.yaml makes 03c mint a NEW Talos CA, so the archived talosconfig and kubeconfig stop
@@ -37,14 +37,25 @@ docker info >/dev/null 2>&1 || die "docker not responding (start Rancher/Docker 
 [ -f "${STEP_DIR}/03c_talos_cluster_config.sh" ] || die "missing 03c, run from the repo root"
 IPS=("${ALL_IPS[@]}")   # workers included: 03c configures them in the same pass, so they must be up front too
 
+if [ "$DISABLE_FLANNEL_AND_KUBE_PROXY" = "true" ]; then
+  CNI_RESULT="Nodes stay NotReady until a CNI is installed."
+  CNI_STATE="Nodes are NotReady on purpose: nothing has installed a CNI yet, and that is where this repo stops."
+  NODES_HINT="# all present, all NotReady"
+else
+  CNI_RESULT="Talos' built-in Flannel is on, so nodes reach Ready on their own."
+  CNI_STATE="Flannel and kube-proxy are on, so the nodes reach Ready without a CNI install. That gets you pod
+and service networking and nothing else: no LoadBalancer, no L2 announcements, no gateway."
+  NODES_HINT="# all present, Ready once Flannel settles"
+fi
+
 cat <<EOF
 
 This will BOOTSTRAP a FIRST-TIME Talos cluster on freshly-flashed nodes:
   nodes   : ${IPS[*]}
-  archive : secrets.yaml + kubeconfig + talosconfig + sealed-secrets-master.key (+ 03c scratch)
+  archive : every file in secrets/ (secrets.yaml, kubeconfig, talosconfig, ...)
             -> secrets/backup_<timestamp>/   (03c then mints a NEW Talos CA; the old creds stop working)
   flow    : preflight -> 03b verify -> archive -> 03c (config + etcd) -> 03d (NIC hardening)
-  result  : a configured cluster + a kubeconfig. Nodes stay NotReady until the platform repo installs a CNI.
+  result  : a configured cluster + a kubeconfig. ${CNI_RESULT}
 
 Requires nodes in MAINTENANCE mode (03a done; 03b boot-verify is run for you below). To wipe a RUNNING
 cluster first, abort and use DANGEROUS_reset_talos_cluster.sh.
@@ -61,7 +72,7 @@ step "checking every node is in MAINTENANCE mode (fresh-init preflight)"
 for ip in "${IPS[@]}"; do
   printf '   %-15s ' "$ip"
   wait_talos_api "$ip" "$MAINT_TIMEOUT" insecure 3 || { echo "NOT IN MAINTENANCE"; \
-    die "${ip} is not answering the maintenance API within ${MAINT_TIMEOUT}s. Bootstrap needs freshly-flashed nodes in maintenance mode (03a/03b). If this is a RUNNING cluster, use DANGEROUS_rebuild_cluster.sh to wipe first."; }
+    die "${ip} is not answering the maintenance API within ${MAINT_TIMEOUT}s. Bootstrap needs freshly-flashed nodes in maintenance mode (03a/03b). If this is a RUNNING cluster, use DANGEROUS_reset_talos_cluster.sh to wipe first."; }
   echo "maintenance"
 done
 ok "all nodes in maintenance"
@@ -92,25 +103,22 @@ done
 if [ "$moved" -gt 0 ]; then ok "archived ${moved} file(s)"; else rmdir "$BACKUP_SUBDIR" 2>/dev/null; ok "nothing to archive (already a clean start)"; fi
 
 run_step "fresh PKI, apply config, bootstrap etcd" "$STEP_DIR" 03c_talos_cluster_config.sh
-run_step "NIC hardening (EEE/watchdog)"            "$STEP_DIR" 03d_nic_hardening.sh
+run_step "NIC hardening (offloads/watchdog + nic-keeper)" "$STEP_DIR" 03d_nic_hardening.sh
 
 summary
 if [ "$FAIL" -eq 0 ]; then
   cat <<HANDOFF
 
-The cluster is configured and etcd is bootstrapped. Nodes are NotReady on purpose: nothing has installed a
-CNI yet, and that is where this repo stops.
+The cluster is configured and etcd is bootstrapped. ${CNI_STATE}
 
   kubeconfig : ${KUBECONFIG_FILE}
-  check      : KUBECONFIG=${KUBECONFIG_FILE} kubectl get nodes   # all present, all NotReady
+  check      : KUBECONFIG=${KUBECONFIG_FILE} kubectl get nodes   ${NODES_HINT}
 
-Next, in the platform repo (https://github.com/yama6a/offgrid), which installs the CNI and then delivers
-everything else from git:
+Point your kubectl at it, and whatever installs the CNI and the rest of the platform takes it from here:
 
-  make bootstrap-cluster
+  make merge-kubeconfig                      # merge into ~/.kube/config, make it the active context
 
-It reads the same kubeconfig, because secrets/ is a symlink to the same off-repo store in both repos. If
-that symlink is missing on the platform side, point it at the same directory before running.
+The kubeconfig is the handover. Nothing else in this repo is needed by whatever runs on the cluster next.
 HANDOFF
 else
   echo "Some steps failed, see above. Fix and re-run: this orchestrator is re-runnable from the top."

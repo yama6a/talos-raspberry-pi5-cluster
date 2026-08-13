@@ -12,19 +12,16 @@
 </p>
 
 > Hardware, OS and cluster bring-up, documented end to end. Flash the NVMe drives, configure Talos, bootstrap
-> etcd, and hand over a working `kubeconfig`. Everything that runs *on* the cluster lives in the platform repo.
+> etcd, and hand over a working `kubeconfig`. It stops there: nothing that runs *on* the cluster lives here.
 >
-> Three repos, in order:
-> [talos-raspberry-pi5](https://github.com/yama6a/talos-raspberry-pi5) builds the node image,
-> **this one** stands up the cluster,
-> [offgrid](https://github.com/yama6a/offgrid) delivers the platform and workloads onto it.
+> The node image is built separately, in
+> [talos-raspberry-pi5](https://github.com/yama6a/talos-raspberry-pi5); this repo consumes its releases.
 
 ## Contents
 
 - [Overview](#overview)
 - [Hardware](#hardware)
 - [Repository layout](#repository-layout)
-- [Published charts](#published-charts)
 - [Getting started](#getting-started)
 - [Where this repo stops](#where-this-repo-stops)
 - [Day-2 operations](#day-2-operations)
@@ -38,15 +35,14 @@
 - Three Raspberry Pi 5s, every node a control-plane node: HA etcd, workloads co-located.
 - Booting Talos off NVMe. Talos ships no official Pi 5 image, so this flashes a release of
   [yama6a/talos-raspberry-pi5](https://github.com/yama6a/talos-raspberry-pi5): a Raspberry Pi kernel at 4K pages
-  (Longhorn and XFS need that), plus the extensions the cluster needs.
+  (some storage software does not cope with 16K), plus the extensions the cluster needs.
 - A 4th bay takes a worker, and it does not have to be a Pi: the node list carries a hardware type per node and
   resolves the image from it, so an x86 box joins from Image Factory by the same two commands.
 - Config is three files: committed `versions.env` (the renovate-managed Talos + Kubernetes pins), plus gitignored
   `inventory.yaml` (your nodes) and `.env` (VIP, sizing, registry auth), each copied from a committed template.
   Nothing is hardcoded in a script.
-- Two Helm charts live here because they are hardware- and OS-specific: `nic-keeper` (the Pi 5 `macb` NIC
-  agent, the runtime half of what `03d` does at the machine-config level) and `coredns` (scheduling constraints
-  patched onto the Deployment Talos owns). See [Published charts](#published-charts).
+- One Kubernetes object is applied from here, because it is pure hardware mitigation: the `nic-keeper`
+  DaemonSet, the runtime half of what `03d` does at the machine-config level. `03d` applies it.
 
 ## Hardware
 
@@ -77,11 +73,11 @@ Why these parts:
 |-- inventory.example.yaml  # template for the node list; copy to inventory.yaml
 |-- .env.example            # template for config + secrets; copy to .env
 |-- docs/                   # the numbered runbook + decision records (01 to 06)
-|-- charts/                 # nic-keeper + coredns, published to ghcr.io for the platform repo
 |-- lib/
 |   |-- shell/              # every bootstrap script + the shared common.sh
+|   |-- k8s/                # the nic-keeper manifest, applied by 03d
 |   `-- talos/              # Image Factory schematics for node types without a custom build
-`-- secrets/                # gitignored: talos certs, talosconfig, kubeconfig
+`-- secrets/                # gitignored: talos certs, talosconfig, kubeconfig (an off-repo store)
 ```
 
 ## Getting started
@@ -114,63 +110,42 @@ make bootstrap-cluster              # preflight + boot-verify + config + etcd + 
 
 # 5. Verify
 make check-health                   # Talos cluster health
-eval "$(make print-kubeconfig)"     # point kubectl at the cluster
+make merge-kubeconfig               # merge into ~/.kube/config, make it the active context
 kubectl get nodes                   # all present, all NotReady until a CNI lands
 ```
+
+`make merge-kubeconfig` is the handover out of this repo: the kubeconfig is the only thing whatever runs on
+the cluster next needs from here. For a one-shell override that leaves `~/.kube/config` alone, use
+`eval "$(make print-kubeconfig)"` instead.
 
 Instead of `make bootstrap-cluster` you can run the steps in runbook order. Every target maps to a script in
 `lib/shell/`; `make help` lists them all. Per-phase reasoning and verification is in [the docs](#documentation).
 
-## Published charts
-
-The two charts are published to GHCR on merge to `main`, and appear under this repo's **Packages** sidebar:
-
-```
-oci://ghcr.io/yama6a/charts/nic-keeper
-oci://ghcr.io/yama6a/charts/coredns
-```
-
-Consume one by pinning it as a dependency:
-
-```yaml
-# Chart.yaml
-dependencies:
-  - name: nic-keeper
-    version: "1.0.0"
-    repository: oci://ghcr.io/yama6a/charts
-```
-
-There is no GitHub Release for these: the registry is the distribution channel. Renovate picks up new versions
-from the registry's tag list with no extra configuration, because its `helmv3` manager reads `oci://`
-dependencies natively.
-
-Each chart's `version:` in its own `Chart.yaml` is the published artifact version, and CI fails a PR that edits
-a chart without bumping it.
-
 ## Where this repo stops
 
 `make bootstrap-cluster` ends with a configured cluster, etcd bootstrapped, and a `kubeconfig` in `secrets/`.
-**Nodes stay `NotReady` on purpose**: nothing has installed a CNI, and that is the first thing the platform repo
-does.
+**Nodes stay `NotReady` on purpose**: nothing has installed a CNI, and that is the first thing whatever runs
+on the cluster has to do.
 
-Continue in [yama6a/offgrid](https://github.com/yama6a/offgrid):
+That is the default. `DISABLE_FLANNEL_AND_KUBE_PROXY="false"` in `.env` keeps Talos' built-in Flannel and
+kube-proxy instead, so the cluster reaches `Ready` standalone with no CNI install: pod and service networking
+only, no LoadBalancer, no L2 announcements, no gateway. Pick before bootstrap; switching afterwards is a
+rebuild. See [docs/03](docs/03_operating_system.md#cluster-bring-up).
 
 ```bash
-make bootstrap-cluster              # installs Cilium, then Argo CD delivers everything else from git
+make merge-kubeconfig               # make the cluster your active kubectl context
 ```
 
-Both repos read the same credentials because `secrets/` is a symlink to the same off-repo store in each. If that
-symlink is missing on the platform side, point it at the same directory before running.
+That context is the whole handover. Nothing else in `secrets/` leaves this repo, and nothing here needs to
+know what gets deployed next.
 
-The division of labour:
+Two optional hooks in `.env` are where the cluster's own workloads get a say in node lifecycle, because this
+repo cannot know what they are:
 
-| This repo | The platform repo |
-|---|---|
-| Hardware, EEPROM, NVMe flashing | The CNI (Cilium) and everything above it |
-| Talos machine config, etcd bootstrap, PKI | Argo CD and every app it delivers |
-| Talos and Kubernetes upgrades | Ingress, TLS, SSO, storage, databases, messaging, monitoring |
-| Node loss and replacement | Off-cluster S3 backups and restores |
-| `nic-keeper` + `coredns` charts (published to ghcr.io) | Consuming those charts as pinned dependencies |
+| Key | Used by | If empty |
+|---|---|---|
+| `PRE_DRAIN_HEALTH_HOOK` | `03e`, before draining each node | nothing gates the reboot on replicated-store health |
+| `REBALANCE_SKIP_NAMESPACES` | `03g` | every stateless Deployment is restarted |
 
 ## Day-2 operations
 
@@ -183,7 +158,8 @@ The division of labour:
 | Recover a lost node       | `make recover-node NODE=<host>`                                               |
 | Re-spread stateless pods  | `make rebalance-workloads`                                                    |
 | Reset all nodes           | `make reset-cluster`                                                          |
-| Inspect                   | `make check-health`, `make talosctl <args>`, `eval "$(make print-kubeconfig)"` |
+| Point kubectl at it       | `make merge-kubeconfig` (persistent), `eval "$(make print-kubeconfig)"` (one shell) |
+| Inspect                   | `make check-health`, `make talosctl <args>`                                   |
 
 A Talos or Kubernetes bump is two steps: merge the Renovate PR that moves the pin in `versions.env`, then run
 the upgrade target. Merging alone changes nothing on the nodes.
@@ -192,13 +168,11 @@ the upgrade target. Merging alone changes nothing on the nodes.
 
 - **`talosctl` misbehaves on macOS**: use the dockerized `make talosctl <args>`. A native client is not required
   ([docs/03](docs/03_operating_system.md)).
-- **Nodes are `NotReady` after bring-up**: expected. Nothing here installs a CNI; the platform repo does.
-- **Intermittent NIC drops on a Pi 5**: the `macb` wedge, handled by NIC hardening (03d) plus the `nic-keeper`
-  DaemonSet ([docs/03](docs/03_operating_system.md)).
-- **A node came back after a reflash and will not rejoin**: its etcd member and Longhorn disk records outlive the
-  disk. `make recover-node NODE=<host>` ([docs/05](docs/05_node_recovery.md)).
-- **Both CoreDNS replicas landed on one node**: the anti-affinity patch is delivered by the platform repo at
-  wave 0, so it only applies once Argo CD is running ([docs/03](docs/03_operating_system.md)).
+- **Nodes are `NotReady` after bring-up**: expected. Nothing here installs a CNI.
+- **Intermittent NIC drops on a Pi 5**: the `macb` wedge. Both halves of the mitigation are applied by 03d,
+  the machine config and the `nic-keeper` DaemonSet ([docs/03](docs/03_operating_system.md)).
+- **A node came back after a reflash and will not rejoin**: its etcd member outlives the disk.
+  `make recover-node NODE=<host>` ([docs/05](docs/05_node_recovery.md)).
 
 ## Documentation
 
@@ -206,9 +180,9 @@ the upgrade target. Merging alone changes nothing on the nodes.
 |----------------------------------------------------|------------------------------------------------------------------------------|
 | [01_hardware](docs/01_hardware.md)                 | Bill of materials + the reasoning behind every part.                         |
 | [02_raspi_eeprom](docs/02_raspi_eeprom.md)         | Flashing a common Pi 5 EEPROM boot config.                                   |
-| [03_operating_system](docs/03_operating_system.md) | Talos: OS choice, where the Pi 5 image comes from, cluster bring-up, NIC hardening, CoreDNS placement. |
+| [03_operating_system](docs/03_operating_system.md) | Talos: OS choice, where the Pi 5 image comes from, cluster bring-up, NIC hardening. |
 | [04_worker_nodes](docs/04_worker_nodes.md)         | The node inventory, and adding a worker that does not have to be a Pi.       |
-| [05_node_recovery](docs/05_node_recovery.md)       | Losing or replacing a node: etcd, Talos, Longhorn, CNPG, RabbitMQ.           |
+| [05_node_recovery](docs/05_node_recovery.md)       | Losing or replacing a node: etcd, Talos, the machine-level records.          |
 | [06_renovate](docs/06_renovate.md)                 | Automated dependency updates and when Renovate is allowed to self-merge.     |
 
 Repo-wide conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).

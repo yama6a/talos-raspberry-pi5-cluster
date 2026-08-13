@@ -1,5 +1,5 @@
-# Static checks only, no cluster. Each job NAME is a branch-protection required-check context, so renaming one
-# silently drops that gate until branch protection is updated too.
+# Static checks only, no cluster. `main` has no branch protection, so nothing here is a required check yet;
+# if you add protection (docs/06_renovate.md), each job NAME becomes the context to require.
 name: CI
 
 on:
@@ -38,6 +38,12 @@ jobs:
           curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz \
             | tar xz actionlint
           ./actionlint -color
+      # Schema-checks what 03d applies. Core types only, so the default schema location is enough.
+      - name: kubeconform
+        run: |
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar xz kubeconform
+          ./kubeconform -strict -summary -schema-location default lib/k8s/*.yaml
 
   renovate-config:
     name: renovate-config
@@ -46,60 +52,3 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: validate renovate.json5 # a broken config silently halts ALL dependency updates
         run: npx --yes --package renovate -- renovate-config-validator --strict renovate.json5
-
-  chart-version:
-    name: chart-version
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0 # need main to diff against
-      # publish-charts pushes on merge and refuses to overwrite an existing version, so a chart edited without
-      # a version bump would silently never reach the registry. Fail here instead, while it is still fixable.
-      - name: a changed chart must carry a bumped version
-        run: |
-          fail=0
-          base="origin/${{ github.base_ref }}"
-          for dir in charts/*/; do
-            name="$(basename "$dir")"
-            git diff --quiet "$base"...HEAD -- "$dir" && continue
-            new="$(awk '/^version:/{print $2}' "${dir}Chart.yaml")"
-            old="$(git show "$base:${dir}Chart.yaml" 2>/dev/null | awk '/^version:/{print $2}')"
-            if [ -z "$old" ]; then echo "::notice::${name} is new (${new})"; continue; fi
-            if [ "$new" = "$old" ]; then
-              echo "::error file=${dir}Chart.yaml::${name} changed but its version is still ${old}. Bump it, or publish-charts will skip the change."
-              fail=1
-            else
-              echo "::notice::${name} ${old} -> ${new}"
-            fi
-          done
-          exit $fail
-
-  helm:
-    name: helm
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
-        with:
-          version: v4.2.3 # pinned so the gate matches the maintainer's local helm
-      - name: install kubeconform
-        run: |
-          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
-            | tar xz kubeconform && sudo mv kubeconform /usr/local/bin/
-      - name: helm lint + template + kubeconform
-        # Both charts render their own manifests and pin no upstream, so there is no dependency build.
-        run: |
-          fail=0
-          schema='https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
-          for dir in charts/*/; do
-            echo "::group::$dir"
-            helm lint "$dir" || { echo "::error::helm lint failed: $dir"; fail=1; }
-            if ! helm template "$dir" \
-                 | kubeconform -ignore-missing-schemas -summary \
-                     -schema-location default -schema-location "$schema"; then
-              echo "::error::template/kubeconform failed: $dir"; fail=1
-            fi
-            echo "::endgroup::"
-          done
-          exit $fail

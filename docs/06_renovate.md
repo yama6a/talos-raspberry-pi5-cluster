@@ -1,23 +1,22 @@
-# 14: Renovate (automatic dependency updates)
+# Renovate (automatic dependency updates)
 
 Renovate opens PRs to bump every pinned dependency in the repo.
 
 - Config: [`/renovate.json5`](../renovate.json5)
 - Runner: [`.github/workflows/renovate.yaml`](../.github/workflows/renovate.yaml)
-- Gate: [`.github/workflows/ci.yaml`](../.github/workflows/ci.yaml) validates every PR (shellcheck, `helm
-  dependency build`/lint/template, kubeconform, renovate-config-validator, yamllint, actionlint) and the
-  automerge waits on it. See "How the automerge works".
+- Gate: [`.github/workflows/ci.yaml`](../.github/workflows/ci.yaml) validates every PR (shellcheck, yamllint,
+  actionlint, kubeconform, renovate-config-validator) and the automerge waits on it. See "How the automerge
+  works".
 
 ## Why Renovate, not Dependabot
 
-Dependabot has no Helm manager and cannot touch image tags inside `values.yaml` or the version vars in
-`versions.env`. It would cover GitHub Actions only. Renovate covers everything this repo pins:
+Dependabot cannot touch image tags inside a plain Kubernetes manifest or the version vars in `versions.env`.
+It would cover GitHub Actions only. Renovate covers everything this repo pins:
 
 | Manager | Covers |
 |---|---|
 | `github-actions` | the workflow's own action pins, kept digest-pinned |
-| `helm-values` | standard-shape `image:` / `repository`+`tag` in a `values.yaml` |
-| regex, annotated | anything carrying `# renovate: datasource=...`: chart-template images, shell-script image literals, and the Talos/Kubernetes recipe in `versions.env` |
+| regex, annotated | anything carrying `# renovate: datasource=...`: the `lib/k8s/` manifest images, shell-script image literals, and the Talos/Kubernetes recipe in `versions.env` |
 
 The pin is the single source of truth. Versions are never restated in prose or comments, so a bump cannot strand
 a stale number. A version literal survives in a doc only when that exact version is the point: a minimum, a
@@ -46,25 +45,25 @@ is required. Issues read-write is what lets Renovate create and maintain the das
 ### How the automerge works
 
 `platformAutomerge: false`, so Renovate merges through the API itself rather than using GitHub's native
-auto-merge. It merges only when the PR is mergeable, which now means after the required CI checks pass: Renovate
-waits on status checks by default, and `main`'s branch protection enforces them on the API merge too.
+auto-merge. It merges only once CI is green, because Renovate waits on a PR's status checks by default.
+That default is the ONLY gate: `main` has no branch protection and no rulesets, so nothing enforces the
+checks on the merge call itself.
 
 Consequence: the combined PR merges on a LATER run once CI is green, roughly 2h+ after it was opened, one merge
 per run. That two-pass timing is why the cron runs every 3 hours. A weekly cron would leave a green,
 auto-mergeable PR sitting for a week. A manual `workflow_dispatch` also completes a pending merge on demand.
 
-Branch protection on `main` requires the CI checks, not reviews. A required review would deadlock Renovate,
-since it cannot approve its own PR. `enforce_admins` stays off so a break-glass fix can still land.
-
-Run this once, after the CI checks have run at least once (open a PR first so GitHub registers the check
-contexts):
+**Optional hardening, not currently applied.** To make the CI checks binding rather than advisory, require
+them on `main`. Run it once, after the checks have run at least once (open a PR first, so GitHub registers
+the contexts). Require checks, never reviews: a required review would deadlock Renovate, which cannot approve
+its own PR. `enforce_admins` stays off so a break-glass fix can still land.
 
 ```bash
-gh api -X PUT repos/yama6a/offgrid/branches/main/protection \
+gh api -X PUT repos/yama6a/talos-raspberry-pi5-cluster/branches/main/protection \
   -H "Accept: application/vnd.github+json" --input - <<'JSON'
 {
   "required_status_checks": { "strict": true, "checks": [
-    {"context": "shell"}, {"context": "helm"}, {"context": "yaml"}, {"context": "renovate-config"}
+    {"context": "shell"}, {"context": "yaml"}, {"context": "renovate-config"}
   ]},
   "enforce_admins": false,
   "required_pull_request_reviews": null,
@@ -73,18 +72,21 @@ gh api -X PUT repos/yama6a/offgrid/branches/main/protection \
 JSON
 ```
 
+The contexts are the CI job NAMES, so renaming a job means updating this too.
+
 ### The risk, and how to dial it back
 
-Nothing in this repo applies itself. A merged bump changes a pinned string and no more: `TALOS_IMAGE_RELEASE`
-and `KUBERNETES_VERSION` only take effect when you run `make upgrade-talos` / `make upgrade-k8s`, and a fresh
-drive needs `make flash-talos-nvme`. So automerge here is a "newer version exists" signal, not a deployment.
+Nothing in this repo applies itself, without exception. A merged bump changes a pinned string and no more:
+`TALOS_IMAGE_RELEASE` and `KUBERNETES_VERSION` take effect when you run `make upgrade-talos` /
+`make upgrade-k8s`, the `nic-keeper` image when you run `make harden-nics`, and a fresh drive needs
+`make flash-talos-nvme`. So automerge here is a "newer version exists" signal, not a deployment.
 
 Two things still need care:
 
 - `KUBERNETES_VERSION` is capped by the pinned Talos release's own k8s default, so move it WITH Talos, never
   ahead of it. `make upgrade-k8s` rejects a version the running Talos will not serve.
-- The two published charts DO reach live clusters, but only after someone cuts a release here and bumps the
-  pinned OCI version in the platform repo. Neither step is automatic.
+- The `nic-keeper` image in `lib/k8s/` is the one pin that describes something running on the cluster. A
+  merged bump still changes only a string: `make harden-nics` is what applies it.
 
 Accepted hands-off trade-off. To de-risk without splitting the PR: add `minimumReleaseAge` (e.g. `"3 days"`) so
 bumps bake before they are eligible, or drop `automerge` from the specific deps you want to gate.

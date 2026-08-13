@@ -5,8 +5,8 @@
 # No reflash: Talos upgrades are atomic A/B with rollback, and talosctl refuses to proceed if a reboot would
 # break etcd quorum.
 # We CORDON + DRAIN each node ourselves before `talosctl upgrade`, so Talos's own in-upgrade drain finds an
-# empty node and cannot hang on a PDB or a slow-terminating pod. A Longhorn volume-health gate runs first, so
-# we never reboot a node holding a volume's last healthy replica.
+# empty node and cannot hang on a PDB or a slow-terminating pod. An optional replication-health gate runs
+# first, so we never reboot a node holding a replicated store's last healthy copy.
 # This upgrades the OS ONLY. Kubernetes is a separate, no-reboot roll: 03f. If both changed, run 03e then 03f.
 # Re-run-safe: a node already on the target image is a clean no-op, so a re-run resumes.
 set -euo pipefail
@@ -20,12 +20,12 @@ HEALTH_TIMEOUT=1800   # secs to wait per node for reboot + installer pull + rejo
                       # image over your home link, so keep this generous; matches talosctl's own default)
 # Pre-drain (this script cordons+drains each node BEFORE talosctl upgrade, so Talos's own in-upgrade drain
 # finds an empty node and can't hang on a PDB or a slow-terminating pod). See 03_operating_system.md.
-REPLICATION_HEALTH_TIMEOUT=1800  # secs: before draining EACH node, wait until every replicated store is healthy
-                                 # + in sync (Longhorn volumes, CNPG clusters, RabbitMQ) so taking a node down
-                                 # can't drop a volume's last replica or an un-caught-up DB standby. Also waits
-                                 # out the PREVIOUS node's post-reboot resync. Abort if exceeded (fix + re-run).
+REPLICATION_HEALTH_TIMEOUT=1800  # secs: before draining EACH node, wait for PRE_DRAIN_HEALTH_HOOK to report
+                                 # every replicated store healthy + in sync, so taking a node down can't drop
+                                 # a last replica or an un-caught-up standby. Also waits out the PREVIOUS
+                                 # node's post-reboot resync. Abort if exceeded (fix + re-run).
 GRACEFUL_DRAIN_TIMEOUT=120  # secs: bounded polite drain (honors eviction) before escalating to force
-FORCE_GRACE=20              # secs: grace-period on the force-delete of stragglers (let rabbit flush; 0=now)
+FORCE_GRACE=20              # secs: grace-period on the force-delete of stragglers (let them flush; 0=now)
 
 require docker kubectl
 docker info >/dev/null 2>&1 || die "docker not responding (start Rancher/Docker Desktop)"
@@ -39,60 +39,42 @@ node_for_ip() {
     | awk -v ip="$1" '$2==ip{print $1; exit}'
 }
 
-# Each _*_unready below ECHOES the not-yet-in-sync items (space-separated), empty when all good. A missing
-# CRD / absent subsystem => kubectl errors to /dev/null => empty => treated as healthy (nothing to protect).
-
-# Longhorn: volumes whose robustness is degraded/faulted. `healthy` IS Longhorn's all-replicas-in-sync signal
-# (it drops to `degraded` during a rebuild); detached volumes report `unknown` (fine). A degraded volume is
-# exactly when a node might hold its LAST healthy replica -> don't reboot into that.
-_longhorn_unready() {
-  kubectl -n longhorn-system get volumes.longhorn.io \
-    -o jsonpath='{range .items[?(@.status.robustness=="degraded")]}{.metadata.name}{" "}{end}{range .items[?(@.status.robustness=="faulted")]}{.metadata.name}{" "}{end}' \
-    2>/dev/null
-}
-
-# CNPG: a cluster is in sync only when phase=="Cluster in healthy state", readyInstances==spec.instances (the
-# streaming standby is up + caught up), and currentPrimary==targetPrimary (no switchover/failover mid-flight).
-_cnpg_unready() {
-  kubectl get clusters.postgresql.cnpg.io -A \
-    -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"|"}{.spec.instances}{"|"}{.status.readyInstances}{"|"}{.status.phase}{"|"}{.status.currentPrimary}{"|"}{.status.targetPrimary}{"\n"}{end}' \
-    2>/dev/null \
-  | awk -F'|' 'NF>=4 && ( $3 != $2 || $4 != "Cluster in healthy state" || ($6 != "" && $5 != $6) ) { printf "%s ", $1 }'
-}
-
-# RabbitMQ: all broker replicas ready (quorum queues have full membership) + cluster available. Deliberately
-# ignores the NoWarnings condition (benign, e.g. mem request!=limit): gating on it would hang forever.
-_rabbitmq_unready() {
-  kubectl get rabbitmqclusters.rabbitmq.com -A \
-    -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"|"}{range .status.conditions[*]}{.type}={.status};{end}{"\n"}{end}' \
-    2>/dev/null \
-  | awk -F'|' 'NF>=2 && !( $2 ~ /AllReplicasReady=True;/ && $2 ~ /ClusterAvailable=True;/ ) { printf "%s ", $1 }'
-}
-
-# wait_replication_healthy -> block until Longhorn + CNPG + RabbitMQ are all healthy/in-sync, or die after
-# REPLICATION_HEALTH_TIMEOUT naming the stragglers. Run before draining EACH node so the previous node's
-# post-reboot resync (replica rebuild / standby catch-up / broker rejoin) has fully settled first.
+# wait_replication_healthy -> block until whatever the cluster runs reports its replicated stores healthy and
+# in sync. Run before draining EACH node, so the previous node's post-reboot resync (replica rebuild, standby
+# catch-up, broker rejoin) has fully settled before the next one goes down.
+#
+# This repo cannot know what those stores are, so the check is PRE_DRAIN_HEALTH_HOOK in .env: any command that
+# exits 0 once everything is in sync and non-zero otherwise. It gets NODE and REPLICATION_HEALTH_TIMEOUT in
+# its environment. Unset means nothing gates this, which is fine on a cluster with no replicated state and
+# dangerous on one that has it, so it warns rather than passing silently.
+HOOK_WARNED=0
 wait_replication_healthy() {
-  local what fn deadline pending pair
-  for pair in "Longhorn volumes:_longhorn_unready" "CNPG clusters:_cnpg_unready" "RabbitMQ:_rabbitmq_unready"; do
-    what="${pair%%:*}"; fn="${pair##*:}"
-    printf '  waiting for %s healthy + in sync' "$what"
-    deadline=$(( $(date +%s) + REPLICATION_HEALTH_TIMEOUT ))
-    while :; do
-      pending="$("$fn")"
-      [ -z "${pending// }" ] && { printf ' ok\n'; break; }
-      [ "$(date +%s)" -ge "$deadline" ] && die "${what} not healthy/in-sync after ${REPLICATION_HEALTH_TIMEOUT}s: ${pending}. Fix, then re-run (idempotent, skips done nodes)."
-      printf '.'; sleep 15
-    done
+  local node="$1"
+  if [ -z "$PRE_DRAIN_HEALTH_HOOK" ]; then
+    if [ "$HOOK_WARNED" -eq 0 ]; then
+      warn "PRE_DRAIN_HEALTH_HOOK is unset, so nothing checks replicated-store health before each reboot."
+      warn "  On a cluster with replicated storage or databases, rebooting mid-rebuild can drop a last replica."
+      HOOK_WARNED=1
+    fi
+    return 0
+  fi
+  [ -x "$PRE_DRAIN_HEALTH_HOOK" ] || die "PRE_DRAIN_HEALTH_HOOK is not executable: ${PRE_DRAIN_HEALTH_HOOK}"
+  printf '  waiting for replicated stores healthy + in sync (%s)' "$(basename "$PRE_DRAIN_HEALTH_HOOK")"
+  local deadline; deadline=$(( $(date +%s) + REPLICATION_HEALTH_TIMEOUT ))
+  while :; do
+    NODE="$node" REPLICATION_HEALTH_TIMEOUT="$REPLICATION_HEALTH_TIMEOUT" \
+      "$PRE_DRAIN_HEALTH_HOOK" >/dev/null 2>&1 && { printf ' ok\n'; return 0; }
+    [ "$(date +%s)" -ge "$deadline" ] && die "replicated stores not healthy after ${REPLICATION_HEALTH_TIMEOUT}s (run ${PRE_DRAIN_HEALTH_HOOK} to see why). Fix, then re-run (idempotent, skips done nodes)."
+    printf '.'; sleep 15
   done
 }
 
 # drain_node <node> -> cordon, then a bounded graceful drain; force-delete any stragglers so the node can
-# ALWAYS reboot (the per-node Longhorn engine, plus the CNPG and RabbitMQ instances hard anti-affinity pins one
-# per node, so a graceful drain can only kill them; they come back after the reboot).
-# Do NOT shorten GRACEFUL_DRAIN_TIMEOUT below the time a CNPG switchover needs (~33s measured): the primary's
-# eviction is REFUSED by its own PDB until CNPG has handed over, so force-deleting it early turns a ~20s
-# switchover into a ~60s failover. See docs/05_node_recovery.md.
+# ALWAYS reboot. A per-node storage engine, and any instance that hard anti-affinity pins one per node, cannot
+# relocate, so a graceful drain can only kill them; they come back after the reboot.
+# Do NOT shorten GRACEFUL_DRAIN_TIMEOUT below the time a database switchover needs: an operator that moves the
+# primary away first has its eviction REFUSED by its own PDB until the handover is done, so force-deleting it
+# early turns a short switchover into a much longer failover.
 drain_node() {
   local node="$1"
   kubectl cordon "$node" >/dev/null
@@ -105,8 +87,9 @@ drain_node() {
 }
 
 # Don't strand a node cordoned OR tainted if we die mid-node (drain/upgrade failure); Talos also uncordons on
-# rejoin. The out-of-service taint is dead-node-watcher's: it fires on the reboot (cordoned + NotReady past its
-# grace), and a node keeping it accepts no pods, so clear it here rather than depending on that loop being up.
+# rejoin. The out-of-service taint may be set by whatever watches for dead nodes, since a reboot looks like one
+# (cordoned + NotReady past its grace). A node keeping it accepts no pods, so clear it here rather than
+# depending on anything else to.
 DRAINING_NODE=""
 trap '[ -n "$DRAINING_NODE" ] && { kubectl uncordon "$DRAINING_NODE"; kubectl taint node "$DRAINING_NODE" node.kubernetes.io/out-of-service-; } >/dev/null 2>&1 || true' EXIT
 
@@ -140,7 +123,7 @@ for host in "${HOSTS[@]}"; do
   # Gate on replication health BEFORE cordoning (an abort here leaves no stray cordon): never take a node
   # down while any replicated store is degraded / a standby is catching up / a broker is rejoining.
   say "checking replicated stores are healthy + in sync before draining ${node} (${ip})"
-  wait_replication_healthy
+  wait_replication_healthy "$node"
 
   # Pre-drain ourselves so Talos's own in-upgrade drain is a fast no-op (can't hang on a PDB / slow pod).
   say "draining ${node}"

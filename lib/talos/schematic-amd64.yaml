@@ -5,5 +5,5 @@ customization:
   systemExtensions:
     officialExtensions:
       - siderolabs/intel-ucode        # CPU errata + speculative-execution mitigations; Talos ships no microcode itself
-      - siderolabs/iscsi-tools        # Longhorn attaches its volumes over iSCSI
-      - siderolabs/util-linux-tools   # Longhorn calls fstrim
+      - siderolabs/iscsi-tools        # iSCSI-based CSI drivers need iscsid/iscsiadm in userspace
+      - siderolabs/util-linux-tools   # fstrim

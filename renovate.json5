@@ -1,8 +1,7 @@
 {
   // Opens dependency-update PRs for every pin in the repo. Which manager owns what:
-  //   helm-values     container images in the two published charts' values.yaml
   //   github-actions  the renovate workflow's own action pins
-  //   customManagers  images in chart templates + shell scripts, and the versions.env pins
+  //   customManagers  images in the k8s manifests + shell scripts, and the versions.env pins
   // Cadence is the cron in .github/workflows/renovate.yaml, not an internal `schedule`, so a manual
   // workflow_dispatch works too. Docs: docs/06_renovate.md.
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
@@ -15,28 +14,26 @@
   prHourlyLimit: 0, // no hourly throttle
   dependencyDashboardTitle: "Renovate dependency dashboard",
 
-  // Automerge through Renovate's own API call, not GitHub's native auto-merge. Renovate waits for a PR's
-  // required CI checks by default, and branch protection enforces them on the merge call too, so the combined
-  // PR lands on a LATER run once CI is green (~2h+ after it was opened). That is why the cron runs every 3h
-  // rather than weekly. platformAutomerge stays false to keep the merge on Renovate's side.
+  // Automerge through Renovate's own API call, not GitHub's native auto-merge. Renovate waits for a PR's CI
+  // checks by default, which is the only gate (`main` has no branch protection), so the combined PR lands on
+  // a LATER run once CI is green (~2h+ after it was opened). That is why the cron runs every 3h rather than
+  // weekly. platformAutomerge stays false to keep the merge on Renovate's side.
   platformAutomerge: false,
 
-  // The two charts here pin no upstream: they render their own manifests, so helmv3 has nothing to resolve.
-  // Their container images are handled by helm-values and the customManager below.
-
+  // Nothing here is packaged or templated: the one thing this repo applies is a plain manifest in lib/k8s/,
+  // so every container image is annotated and picked up by the customManager below.
 
   customManagers: [
     {
-      // Images annotated `# renovate: datasource=docker` in files helm-values cannot read: chart templates,
-      // shell-script literals, and the versions.env extensions. Images in values.yaml are handled by
-      // helm-values or the manager below instead, to avoid double-managing.
+      // Images annotated `# renovate: datasource=docker`: the k8s manifests, shell-script literals, and the
+      // versions.env extensions.
       // Captures repo:tag(+digest) from the ref itself, so tag AND digest stay fresh.
       customType: "regex",
-      description: "docker image refs (annotated) in chart templates, shell scripts and versions.env",
+      description: "docker image refs (annotated) in k8s manifests, shell scripts and versions.env",
       managerFilePatterns: [
         "/^versions\\.env$/",
         "/^lib/shell/.*\\.sh$/",
-        "/^charts/.*/templates/.*\\.yaml$/",
+        "/^lib/k8s/.*\\.yaml$/",
       ],
       matchStrings: [
         "# renovate: datasource=docker(?: versioning=(?<versioning>\\S+))?\\s+[^\\n]*?(?<depName>[a-z0-9][a-z0-9._/-]+):(?<currentValue>[\\w][\\w.-]*)(?:@(?<currentDigest>sha256:[a-f0-9]{64}))?",
@@ -58,10 +55,10 @@
 
   packageRules: [
     {
-      // ONE combined, auto-merged PR for every NON-major update, gated on the required CI checks.
+      // ONE combined, auto-merged PR for every NON-major update, gated on CI.
       // Nothing here applies itself: a merged bump only changes a pinned string. TALOS_IMAGE_RELEASE and
-      // KUBERNETES_VERSION take effect when 03e/03f run, and a fresh drive needs 03a. To de-risk anyway, add
-      // minimumReleaseAge or drop automerge from the deps you want to gate.
+      // KUBERNETES_VERSION take effect when 03e/03f run, the nic-keeper image when 03d runs, and a fresh
+      // drive needs 03a. To de-risk anyway, add minimumReleaseAge or drop automerge from the deps to gate.
       description: "combine all non-major updates into one auto-merged PR",
       matchUpdateTypes: ["minor", "patch", "digest", "pin", "lockFileMaintenance"],
       groupName: "all non-major dependencies",

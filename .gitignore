@@ -9,9 +9,9 @@
 #   cp inventory.example.yaml inventory.yaml
 inventory.yaml
 
-# Live cluster credentials (talosconfig, kubeconfig, secrets.yaml, sealed-secrets master key), written by
-# 03c into `secrets/`, which is a symlink to an off-repo store (a synced drive). Never commit the symlink
-# or anything it points at: the creds live and are backed up outside the repo.
+# Live cluster credentials (talosconfig, kubeconfig, secrets.yaml), written by 03c into `secrets/`, which is
+# a symlink to an off-repo store (a synced drive). Never commit the symlink or anything it points at: the
+# creds live and are backed up outside the repo.
 /secrets
 
 # Downloaded Talos image releases (03a caches one .raw.xz + its decompressed copy per release tag) and other
@@ -24,9 +24,3 @@ inventory.yaml
 .vscode/
 .DS_Store
 __pycache__/
-
-# Vendored Helm dependency blobs. `helm dependency build` pulls each chart's deps into its own charts/ dir;
-# reproducible from Chart.yaml (+ Chart.lock where committed), so never committed. One rule for every chart.
-**/charts/*.tgz
-
-# Vendored chart tarballs only; both charts here pin no upstream, so neither has a Chart.lock to ignore.

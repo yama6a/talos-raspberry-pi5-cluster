@@ -6,6 +6,8 @@
 # netdev names EthernetConfig will accept. They are NOT the names `ethtool -k` prints, which are broader
 # umbrella names, so copying from ethtool output gives you a config Talos rejects.
 # A short-lived privileged probe pod reads only what has no resource: EEE and the watchdog device.
+# Ends by applying lib/k8s/nic-keeper.yaml, the runtime half: the three failure modes machine config cannot
+# reach (EEE LPI-wake, silent wedge detection, post-recovery socket stall) need a live agent.
 #
 # Requires: docker with host networking. The probe node needs registry pull access.
 set -uo pipefail
@@ -37,6 +39,9 @@ SETTLE_INTERVAL=10                         # secs between /readyz probes, poll p
 OFFLOAD_KEYS=(tx-tcp-segmentation tx-generic-segmentation rx-gro)
 PROBE_NS="kube-system"                     # Talos exempts kube-system from Pod Security
 PROBE_POD="nic-hw-probe"
+NIC_KEEPER_NAME="nic-keeper"               # the runtime half applied at the end; ConfigMap + DaemonSet share the name
+NIC_KEEPER_MANIFEST="${REPO_ROOT}/lib/k8s/nic-keeper.yaml"
+ROLLOUT_TIMEOUT=300                        # secs to wait for the DaemonSet to roll after a loop-script change
 PATCH_FILE="nic-hardening-patch.yaml"      # written into TALOS_SCRATCH (=/scratch in the container)
 
 # dockerized kubectl pinned to the cluster's k8s version (KUBERNETES_VERSION), mounting the secrets dir.
@@ -219,12 +224,40 @@ done
 echo
 [ "$streak" -ge "$SETTLE_STREAK" ] \
   && ok  "control-plane API steady over the VIP (${SETTLE_STREAK}x consecutive /readyz)" \
-  || bad "API not steady ${SETTLE_STREAK}x within ${SETTLE_WAIT}s, let the NIC/VIP settle before running 04"
+  || bad "API not steady ${SETTLE_STREAK}x within ${SETTLE_WAIT}s, let the NIC/VIP settle"
+
+# The runtime half. Applied only once the API is proven steady above, since this is the first thing to write
+# to it. Both halves of the mitigation now land together, before any CNI: the DaemonSet controller tolerates
+# node.kubernetes.io/not-ready and the pod is hostNetwork, so it runs on NotReady nodes with no pod network.
+say "applying the ${NIC_KEEPER_NAME} DaemonSet (the runtime half)"
+if [ ! -f "$NIC_KEEPER_MANIFEST" ]; then
+  bad "missing ${NIC_KEEPER_MANIFEST}"
+else
+  # resourceVersion only moves when the object actually changed, so this detects a real edit to the loop
+  # script without parsing apply output or needing a `diff` binary the kubectl image does not ship.
+  CM_BEFORE="$(kubectl -n "$PROBE_NS" get cm "$NIC_KEEPER_NAME" -o jsonpath='{.metadata.resourceVersion}' 2>/dev/null)"
+  if kubectl apply -f - < "$NIC_KEEPER_MANIFEST" >/dev/null; then
+    ok "applied ${NIC_KEEPER_MANIFEST}"
+    CM_AFTER="$(kubectl -n "$PROBE_NS" get cm "$NIC_KEEPER_NAME" -o jsonpath='{.metadata.resourceVersion}' 2>/dev/null)"
+    # A ConfigMap change does not restart the pods that mounted it, so roll them. Skipped on a first apply
+    # (no CM_BEFORE), where the pods are starting with the new script anyway.
+    if [ -n "$CM_BEFORE" ] && [ "$CM_BEFORE" != "$CM_AFTER" ]; then
+      say "the loop script changed, rolling ${NIC_KEEPER_NAME}"
+      kubectl -n "$PROBE_NS" rollout restart "daemonset/${NIC_KEEPER_NAME}" >/dev/null 2>&1 \
+        && kubectl -n "$PROBE_NS" rollout status "daemonset/${NIC_KEEPER_NAME}" --timeout="${ROLLOUT_TIMEOUT}s" >/dev/null 2>&1 \
+        && ok "${NIC_KEEPER_NAME} rolled" \
+        || bad "${NIC_KEEPER_NAME} did not roll out within ${ROLLOUT_TIMEOUT}s (kubectl -n ${PROBE_NS} describe ds ${NIC_KEEPER_NAME})"
+    fi
+  else
+    bad "could not apply ${NIC_KEEPER_MANIFEST}"
+  fi
+fi
 
 summary
 if [ "$FAIL" -eq 0 ]; then
-  echo "NIC machine-config defences applied + verified. Next (deferred, ArgoCD):"
-  echo "  EEE-off + link-watchdog + 'ss -K' DaemonSet, see 03_operating_system.md."
+  echo "NIC defences applied + verified, both halves:"
+  echo "  machine config (offloads, rings, watchdog) + the ${NIC_KEEPER_NAME} DaemonSet"
+  echo "  (EEE-off, link-watchdog, 'ss -K'). See 03_operating_system.md."
   # This run's scratch (discovery capture + the patch files talosctl consumed) lives in ${TALOS_SCRATCH}, an
   # OS temp dir, so there is nothing to clean up and a re-run regenerates it from a fresh probe.
 else

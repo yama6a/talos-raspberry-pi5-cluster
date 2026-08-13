@@ -145,12 +145,12 @@ machine:
 ${REGISTRIES_BLOCK}
   kubelet:
     # Talos runs the kubelet in a container and does NOT auto-propagate /var/mnt mounts into it, so without
-    # this bind Longhorn's pods cannot see their disk. rshared means mounts made inside the bind are visible
-    # on the host too, which Longhorn needs: it creates one sub-mount per replica. See https://github.com/yama6a/offgrid/blob/main/docs/05_storage.md.
+    # this bind a CSI driver's pods cannot see the disk. rshared means mounts made inside the bind are
+    # visible on the host too, which a driver that creates one sub-mount per volume needs.
     extraMounts:
-      - destination: /var/mnt/longhorn
+      - destination: /var/mnt/storage
         type: bind
-        source: /var/mnt/longhorn
+        source: /var/mnt/storage
         options: [bind, rshared, rw]
   features:
     kubePrism:
@@ -164,22 +164,24 @@ ${REGISTRIES_BLOCK}
           ip: ${VIP}
 cluster:
   allowSchedulingOnControlPlanes: true
-  # The defaults trigger spurious leader elections during the cold-boot I/O storm: Longhorn, CNPG and image
-  # pulls saturate the single NVMe, etcd fsync stalls past a second, followers time out, and the election
-  # burst lags every watch and informer. Raised 5x, keeping election at 10x heartbeat.
+  # The defaults trigger spurious leader elections during the cold-boot I/O storm: storage replicas, database
+  # startup and image pulls all saturate the single NVMe, etcd fsync stalls past a second, followers time out,
+  # and the election burst lags every watch and informer. Raised 5x, keeping election at 10x heartbeat.
   etcd:
     extraArgs:
       heartbeat-interval: "500"    # ms (etcd default 100)
       election-timeout: "5000"     # ms (etcd default 1000)
+  # Both keys come from DISABLE_FLANNEL_AND_KUBE_PROXY in .env: 'none'/true leaves the CNI to be installed
+  # separately (a replacement that also takes over kube-proxy), 'flannel'/false keeps the Talos built-in.
   network:
     cni:
-      name: none          # hand the CNI to Cilium
+      name: ${CNI_NAME}
   proxy:
-    disabled: true        # Cilium kube-proxy replacement; L2 needs it
+    disabled: ${PROXY_DISABLED}
   apiServer:
     # Talos audit-logs at Metadata for EVERYTHING by default, which is ~1GB a day per node, mostly leader-election
     # leases and controller reads. Narrowed to writes of real objects, which is ~1.5% of that and is the part
-    # worth keeping: who created, changed or deleted what. The collector ships it, see https://github.com/yama6a/offgrid/blob/main/docs/06_monitoring.md.
+    # worth keeping: who created, changed or deleted what.
     auditPolicy:
       apiVersion: audit.k8s.io/v1
       kind: Policy
@@ -210,12 +212,12 @@ if [ "${#WORKER_HOSTS[@]}" -gt 0 ]; then
 machine:
 ${REGISTRIES_BLOCK}
   kubelet:
-    # Same bind as the control plane: Longhorn runs on every node that carries a disk, and the kubelet cannot
-    # see /var/mnt without it. See https://github.com/yama6a/offgrid/blob/main/docs/05_storage.md.
+    # Same bind as the control plane: a storage layer runs on every node that carries a disk, and the
+    # kubelet cannot see /var/mnt without it.
     extraMounts:
-      - destination: /var/mnt/longhorn
+      - destination: /var/mnt/storage
         type: bind
-        source: /var/mnt/longhorn
+        source: /var/mnt/storage
         options: [bind, rshared, rw]
   features:
     kubePrism:
@@ -224,8 +226,9 @@ ${REGISTRIES_BLOCK}
 EOF
 fi
 
-# Cap EPHEMERAL, then let 'longhorn' take the whole remainder: no maxSize, so it claims what is left, once,
-# at provision time. See https://github.com/yama6a/offgrid/blob/main/docs/05_storage.md.
+# Cap EPHEMERAL, then let 'storage' take the whole remainder: no maxSize, so it claims what is left, once,
+# at provision time. Talos provisions a volume ONCE, so renaming this on a live cluster orphans the old
+# partition rather than renaming it.
 cat > "${TALOS_SCRATCH}/volumes.yaml" <<EOF
 ---
 apiVersion: v1alpha1
@@ -238,7 +241,7 @@ provisioning:
 ---
 apiVersion: v1alpha1
 kind: UserVolumeConfig
-name: longhorn
+name: storage
 provisioning:
   diskSelector:
     match: disk.transport == "nvme"
@@ -256,7 +259,7 @@ if [ "${#WORKER_HOSTS[@]}" -gt 0 ]; then
 fi
 
 # 4b. Wait for every node to be in MAINTENANCE before applying. After a reset
-#     (DANGEROUS_reset_talos_cluster.sh / DANGEROUS_rebuild_cluster.sh) the nodes wipe + reboot
+#     (DANGEROUS_reset_talos_cluster.sh) the nodes wipe + reboot
 #     asynchronously, so the apply-config --insecure below would fail on a node that hasn't come back
 #     yet. A maintenance node answers --insecure; a CONFIGURED one does not (and a freshly-reset node
 #     can't boot configured, STATE is wiped), so this check is never fooled by the pre-reset instance:
@@ -407,4 +410,4 @@ talosctl kubeconfig .
 say "Done."
 echo "   talosconfig: ${OUTDIR}/talosconfig   (export TALOSCONFIG=${OUTDIR}/talosconfig)"
 echo "   kubeconfig:  ${OUTDIR}/kubeconfig    (export KUBECONFIG=${OUTDIR}/kubeconfig && kubectl get nodes -o wide)"
-echo "   cp ~/.kube/config ~/.kube/config.bak && KUBECONFIG=\"${SCRIPT_DIR}/secrets/kubeconfig:${HOME}/.kube/config\" kubectl config view --flatten > /tmp/kc && mv /tmp/kc ~/.kube/config"
+echo "   to make that your default kubectl context instead:  make merge-kubeconfig"

@@ -1,22 +1,21 @@
 #!/usr/bin/env bash
 # DANGEROUS: wipes the whole cluster back to maintenance, INCLUDING all persistent data.
 #
-# Wipes STATE + EPHEMERAL and the `u-longhorn` data user volume. Keeps BOOT/EFI/META,
-# so nodes reboot straight to maintenance with no reflash. Wiping the data volumes too means no orphaned
-# replica or DB data ever survives a reset. Recoverable state comes back from git via ArgoCD; the on-disk
-# data is gone for good.
+# Wipes STATE + EPHEMERAL and the `u-storage` data user volume. Keeps BOOT/EFI/META,
+# so nodes reboot straight to maintenance with no reflash. Wiping the data volume too means no orphaned
+# replica or DB data ever survives a reset; the on-disk data is gone for good.
 #
 # Workers are reset first and must be back in maintenance before the control plane is touched. See the comment
 # on the ordering below; getting it wrong strands a worker with no API and costs a physical reflash.
 #
-# Node state only. Off-cluster S3 backups are the platform repo's to tear down (`make s3-backup-destroy`
-# there); this script never touches them, so a reset is always recoverable from those backups.
+# Node state only. Anything held off-cluster is untouched here, so whether a reset is recoverable depends on
+# what the workloads back up elsewhere.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"   # dockerized talosctl() (mounts CLUSTER_DIR) + the inventory node arrays
 
-confirm_word_always YES "Destroy ENTIRE Talos cluster AND wipe ALL Longhorn/PVC data (u-longhorn)?" \
+confirm_word_always YES "Destroy ENTIRE Talos cluster AND wipe ALL persistent data (u-storage)?" \
   || { echo "skipped destruction (phew!)."; exit 0; }
 
 # ---- knobs ------------------------------------------------------------------
@@ -24,7 +23,7 @@ confirm_word_always YES "Destroy ENTIRE Talos cluster AND wipe ALL Longhorn/PVC 
 # volume: the reset looks each one up by ID and fails the whole call if one is missing. So a label for a volume
 # already dropped from the config belongs in `talosctl wipe disk <part> --drop-partition` instead, not here.
 # Since Talos 1.12 this both wipes AND drops the partition, so 03c re-provisions each from free space.
-WIPE_LABELS="STATE,EPHEMERAL,u-longhorn"
+WIPE_LABELS="STATE,EPHEMERAL,u-storage"
 RESET_TIMEOUT="10m"   # per node. talosctl's own default is 30m, which just retries silently for half an hour
 MAINT_WAIT=300        # secs for a reset worker to answer the maintenance API again
 

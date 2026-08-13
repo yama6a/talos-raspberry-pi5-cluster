@@ -34,8 +34,11 @@ source "$ENV_FILE"
 # Scripts run under `set -u`, so default every key here: an older .env missing one must not trip it.
 # Empty means "skip the feature it enables", see each key's comment in .env.example.
 : "${GITHUB_GHCR_PULL_TOKEN_SECRET:=}"    # 03c bakes into node machine config (kubelet pulls private ghcr.io)
+: "${DISABLE_FLANNEL_AND_KUBE_PROXY:=true}"   # defaults to no CNI and no kube-proxy, for a cluster installing its own
+: "${PRE_DRAIN_HEALTH_HOOK:=}"            # 03e runs it before draining each node; empty = nothing gates store health
+: "${REBALANCE_SKIP_NAMESPACES:=}"        # 03g leaves these namespaces alone; empty = restart every stateless Deployment
 
-# Pinned by the hardware and the platform install, not per-deployment, so not in .env.
+# Pinned by the hardware, not per-deployment, so not in .env.
 EXPECT_NIC="end0"          # Pi 5 wired NIC (the VIP binds to it)
 EXPECT_DISK="nvme0n1"      # the NVMe (install target)
 API_PORT=50000            # Talos API port
@@ -77,6 +80,15 @@ require() {
     esac
   done
 }
+
+# ---- CNI ---------------------------------------------------------------------
+# One switch drives both keys because they are not independent: Flannel does not replace kube-proxy, so a
+# `flannel` + `proxy.disabled: true` combination boots to a healthy-looking cluster where no ClusterIP works.
+case "$DISABLE_FLANNEL_AND_KUBE_PROXY" in
+  true)  CNI_NAME="none"    ; PROXY_DISABLED="true"  ;;
+  false) CNI_NAME="flannel" ; PROXY_DISABLED="false" ;;
+  *) die "DISABLE_FLANNEL_AND_KUBE_PROXY must be true or false, got '${DISABLE_FLANNEL_AND_KUBE_PROXY}'" ;;
+esac
 
 # ---- the node inventory ------------------------------------------------------
 # Every node, control-plane and worker. Sits below require()/die() rather than with the other derived values,

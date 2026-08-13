@@ -1,4 +1,4 @@
-# 17: The node inventory, and adding a worker
+# The node inventory, and adding a worker
 
 Where the node list lives, and what changes when a node is not a control-plane Pi.
 
@@ -76,13 +76,13 @@ The flasher's pick selects the IMAGE, not the drive, so one run covers every dri
 It asks rather than defaulting to a node, because the wrong pick writes another architecture's image and that
 boots to nothing. `NODE=<host>` skips the prompt for a scripted run.
 
-A full `make bootstrap-cluster` or `make rebuild-cluster` needs neither command: 03c iterates the whole
-inventory, control-plane nodes first, so a worker is brought up in the same pass. Adding a worker is not a
-separate operation, it is another entry in the list.
+A full `make bootstrap-cluster` needs neither command: 03c iterates the whole inventory, control-plane nodes
+first, so a worker is brought up in the same pass. Adding a worker is not a separate operation, it is another
+entry in the list.
 
 **It joins schedulable, not cordoned.** A cordon would fight two things: `03g_rebalance_workloads.sh` refuses to
-run while any node is cordoned, and during a bootstrap a cordoned worker packs the whole platform onto the Pis
-and then needs a rebalance. Cordon by hand if you want to stage it.
+run while any node is cordoned, and during a bootstrap a cordoned worker packs everything onto the Pis and then
+needs a rebalance. Cordon by hand if you want to stage it.
 
 ## What a worker's config leaves out
 
@@ -114,20 +114,15 @@ reaches it through a control-plane endpoint.
 Nothing in Kubernetes stops an arm64-only image landing on an amd64 node. The scheduler does not look at image
 architecture, so the pod is placed and then `CrashLoopBackOff`s with `exec format error`.
 
-```
-make check-multiarch                # require every arch the cluster currently runs
-ARCH=amd64 make check-multiarch     # require amd64 BEFORE any amd64 node exists
-```
+That bites the workloads, not this repo, so the check belongs with whatever deploys them: read the LIVE pods
+rather than any config file, because most images come from upstream and never appear in a repo you control,
+and a digest pin that resolves to a single platform instead of an index cannot be caught by reading
+manifests either. Run it BEFORE the first
+node of a new architecture joins, since checking only what the cluster already runs by definition cannot
+catch the image that is about to break.
 
-Run it with `ARCH=` before the first node of a new architecture joins. Without the override it checks only what
-the cluster already is, which by definition cannot catch the image that is about to break.
-
-It reads the LIVE pods, not `values.yaml`, because most images come from upstream charts and never appear in this
-repo. It also catches a digest pin that resolves to a single platform rather than to the index, which reading the
-values files cannot.
-
-A failing image needs a multi-arch rebuild, or a `nodeAffinity` on `kubernetes.io/arch` in its chart so the
-scheduler stops offering it nodes it cannot run on.
+A failing image needs a multi-arch rebuild, or a `nodeAffinity` on `kubernetes.io/arch` so the scheduler stops
+offering it nodes it cannot run on.
 
 ## Reset order: workers first, and finished
 
@@ -154,47 +149,18 @@ and you can retry.
 Same reasoning orders `03e_talos_upgrade.sh` workers-first, though there the cost of getting it wrong is only
 a lost quorum rather than a reflash.
 
-## Two things that break with a non-Pi node
-
-**Cilium L2 announcements.** `CiliumL2AnnouncementPolicy` picks the announcing node from `nodeSelector` alone,
-and applies its `interfaces` regex afterwards, only to choose which links to program on the winner. So a node
-that matches the selector but matches zero devices still takes the lease, programs no ARP responder, and every
-LoadBalancer IP goes dark until the lease moves. A device-NAME regex like `^end0$` walks straight into that the
-first time a non-Pi node joins.
-
-The fix is to match the wired-ethernet CLASS instead, `^en`, which covers `end0` on a Pi and `eno1` or
-`enp0s31f6` on x86 while still excluding `lo`, `bond`/`dummy`, the `cilium_*` virtuals and `wl*` wifi. Then no
-node can match the policy and match zero devices, so `nodeSelector` can stay broad and neither field needs
-editing when hardware changes.
-
-That is sound here for one reason worth stating out loud: **every node has exactly one connected NIC.** Two on
-the same segment would both answer for the LB IP with different MACs and it would flap between them, which is
-the only thing a name-specific regex was protecting against. A disconnected second port is harmless (no frames
-arrive, and Cilium would not select an address-less device anyway); a connected one is not.
-
-Announcing is independent of both role and backend placement: the service is `externalTrafficPolicy: Cluster`,
-so whichever node answers the ARP forwards through the eBPF datapath to Envoy wherever it runs. Measured on the
-live cluster, the lease sat on `talos-cp2` while the only Envoy pod ran on `talos-cp3`, and the ingress served in
-~100ms. So every node being a candidate is wanted: more of them means the lease survives more node losses. See
-[https://github.com/yama6a/offgrid/blob/main/docs/01_networking.md](https://github.com/yama6a/offgrid/blob/main/docs/01_networking.md).
-
-**Node-count literals in alerts.** `cilium-health` compared the agent count against a literal `3`, which stops
-firing the moment a 4th node exists, because 3 of 4 agents up is still "at least 3". It now compares against
-`count(kube_node_info)`. Worth grepping for other literals before adding a node; a silently disarmed alert is
-worse than a noisy one.
-
 ## Scheduling: a bigger node takes a bigger share
 
 `NodeResourcesFit` scores `(allocatable - requested) / allocatable`, a fraction, so nodes converge on the same
 PERCENTAGE full, and a node with 4x the memory settles at roughly 4x the requests. Nothing balances raw pod
 count: `pods` is not scorable by that plugin, and `PodTopologySpread` is always scoped to one workload's own
-replicas, which does nothing for the ~30 single-replica Deployments here.
+replicas, which does nothing for a cluster made mostly of single-replica Deployments.
 
 That is fine, and deliberately left alone. Two consequences to know rather than rediscover:
 
-- The multi-arch check is not optional. Those single-replica pods are exactly what lands on a new node.
+- Checking multi-arch images is not optional. Single-replica pods are exactly what lands on a new node.
 - Blast radius follows share. A node holding several times a Pi's requests cannot be absorbed by the Pis if it
-  dies, and `cluster-memory-overcommit` is the alert that notices.
+  dies, so it is worth alerting on cluster-wide memory overcommit.
 
 If that ever matters, the lever is to advertise less than the hardware has:
 

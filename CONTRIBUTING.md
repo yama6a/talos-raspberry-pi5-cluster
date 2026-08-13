@@ -4,17 +4,17 @@ Conventions that span this repo. Anything specific to one step lives in that ste
 where a decision or trade-off belongs, not in a code comment and not here.
 
 This repo stops at a configured Talos cluster with a working `kubeconfig`. Anything that runs *on* the cluster
-belongs in [offgrid](https://github.com/yama6a/offgrid), with two exceptions: the `nic-keeper` and `coredns`
-charts, which are hardware- and OS-specific and are published from here for that repo to deliver.
+belongs wherever that cluster's platform is defined, with one exception: the `nic-keeper` DaemonSet, which is
+a Pi 5 hardware mitigation and so is applied from here, by `03d`.
 
 ## Repository layout
 
 | Path | Holds |
 |---|---|
 | `lib/shell/` | every bootstrap script (`NN_name.sh`, plus the `DANGEROUS_*` orchestrators) and the shared `common.sh` |
+| `lib/k8s/` | the one manifest this repo applies, see below |
 | `lib/talos/` | Image Factory schematics for node types without a custom build |
 | `docs/` | the narrative and decision record per step (`NN_name.md`) |
-| `charts/` | the two charts published to `ghcr.io`, see below |
 | `Makefile` | a thin dispatcher over `lib/shell/`. `make help` lists every target |
 | `versions.env` | committed. The Talos image release and Kubernetes pins, renovate-managed |
 | `inventory.yaml` | gitignored. One entry per node. `inventory.example.yaml` is the template |
@@ -60,27 +60,29 @@ dockerized `talosctl`, and `step`/`run_step`.
 **Never write a tracked YAML file with `yq -i`.** It rewrites the whole document and drops the blank line
 before a comment block, so even a no-op write leaves the file dirty. `yq` is fine for reads.
 
-## The two published charts
+## The one manifest this repo applies
 
-`charts/nic-keeper` and `charts/coredns` are the only Kubernetes objects this repo owns, because both are
-specific to this hardware and OS: nic-keeper selects `node.kubernetes.io/instance-type: rpi5` (stamped by `03c`
-from each node's inventory `type`), and coredns patches a Deployment Talos itself creates.
+`lib/k8s/nic-keeper.yaml` is the only Kubernetes object here, because it is the only one that is purely a
+property of this hardware: it mitigates the Pi 5 `macb` NIC wedge at runtime, and `03d` is the machine-config
+half of the same mitigation. `03d` applies it, so both halves land together and before any CNI.
 
-They are published to `oci://ghcr.io/yama6a/charts` by `.github/workflows/publish-charts.yaml`, on merge to
-`main`. It publishes a chart only when its version is not already in the registry, so unrelated commits are
-no-ops. There is no tag to cut and no GitHub Release: the registry is the distribution channel, and Renovate
-resolves updates from its tag list.
+Plain manifests, no templating and no packaging. The loop script's tunables are plain assignments in its
+`# ---- knobs ----` block, following the same rule as the shell scripts: to change a value, edit it.
 
-**Their `version:` is NOT inert.** Unlike a wrapper chart, these are published artifacts. Bump the version in
-the same PR that changes the chart: the `chart-version` CI job fails otherwise, because publish-charts would
-silently skip the change rather than overwrite a published version.
+Applying it is not self-healing. Nothing here reconciles, so a Renovate bump of the image is a changed string
+until someone runs `make harden-nics`. That is the same contract as `TALOS_IMAGE_RELEASE`.
 
-## The cross-layer exception
+## Reaching past the cluster
 
-`03e_talos_upgrade.sh` names Longhorn, CNPG and RabbitMQ, and `recover_node.sh` talks to the `longhorn.io` API.
-That is a deliberate exception to the repo boundary, not an oversight: those are the workloads that hang a drain
-or fail to rejoin, and a node lifecycle operation cannot be correct without knowing about them. If you run a
-different storage layer, those two scripts are what you edit.
+Two `.env` keys let the cluster's own workloads take part in node lifecycle, without this repo naming them:
+
+| Key | Used by | Contract |
+|---|---|---|
+| `PRE_DRAIN_HEALTH_HOOK` | `03e`, before draining each node | any command; exit 0 when replicated stores are in sync. Gets `NODE` and `REPLICATION_HEALTH_TIMEOUT` in its environment |
+| `REBALANCE_SKIP_NAMESPACES` | `03g` | space-separated namespaces to leave alone |
+
+Both default to empty, and empty means the step proceeds without that protection. `03e` warns when it does,
+because on a cluster with replicated storage that is a real risk rather than a no-op.
 
 ## Docs
 
@@ -88,5 +90,5 @@ different storage layer, those two scripts are what you edit.
 not the history: this repo rolls forward, so "what it used to be" is dead weight that also goes stale.
 
 Comments are the exception, not the habit: write one when the reason is not derivable from the code, keep it
-short, and attach it to the exact line. `values.yaml` and `.env.example` are the API, so every tunable knob gets
-one aligned trailing comment.
+short, and attach it to the exact line. `.env.example` is the API, so every tunable knob gets one aligned
+trailing comment.
