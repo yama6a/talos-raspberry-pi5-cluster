@@ -20,8 +20,6 @@ fi
 # shellcheck disable=SC1090
 source "$VERSIONS_FILE"
 
-# Per-deployment scalars and secrets. Fixed identifiers are constants below, versions are in versions.env.
-# die() is not defined yet, so error raw.
 ENV_FILE="${REPO_ROOT}/.env"
 if [ ! -f "$ENV_FILE" ]; then
   printf '\033[1;31mERROR: missing %s\n       copy the template and edit it:  cp .env.example .env\033[0m\n' \
@@ -46,8 +44,7 @@ GHCR_SERVER="ghcr.io"     # registry the GHCR pull token is scoped to
 TALOS_IMAGE_REPO="ghcr.io/yama6a/talos-raspberry-pi5"        # the Pi 5 Talos image; TALOS_IMAGE_RELEASE pins the tag
 FACTORY_HOST="factory.talos.dev"                             # stock images for node types we don't build (x86)
 
-# Cannot live in a flat .env: interpolation and a derived version. The node list is in inventory.yaml, parsed
-# further down where die() exists.
+# Cannot live in a flat .env: interpolation and a derived version.
 IFACE="${EXPECT_NIC}"                           # wired NIC the VIP binds to (dhcp + vip)
 INSTALL_DISK="/dev/${EXPECT_DISK}"              # nvme0n1 -> /dev/nvme0n1
 # The image release tag is `<talos version>-<build revision>`; everything Talos-side wants just the version.
@@ -81,7 +78,7 @@ require() {
   done
 }
 
-# ---- CNI ---------------------------------------------------------------------
+# ---- CNI ----
 # One switch drives both keys because they are not independent: Flannel does not replace kube-proxy, so a
 # `flannel` + `proxy.disabled: true` combination boots to a healthy-looking cluster where no ClusterIP works.
 case "$DISABLE_FLANNEL_AND_KUBE_PROXY" in
@@ -90,10 +87,9 @@ case "$DISABLE_FLANNEL_AND_KUBE_PROXY" in
   *) die "DISABLE_FLANNEL_AND_KUBE_PROXY must be true or false, got '${DISABLE_FLANNEL_AND_KUBE_PROXY}'" ;;
 esac
 
-# ---- the node inventory ------------------------------------------------------
-# Every node, control-plane and worker. Sits below require()/die() rather than with the other derived values,
-# because it needs both. A malformed inventory therefore fails at the top of EVERY script, not halfway into
-# whichever one first reads a field.
+# ---- the node inventory ----
+# Parsed below require()/die() rather than with the other derived values, because it needs both. A malformed
+# inventory therefore fails at the top of EVERY script, not halfway into whichever one first reads a field.
 INVENTORY="${REPO_ROOT}/inventory.yaml"
 [ -f "$INVENTORY" ] || die "missing ${INVENTORY}
        copy the template and edit it:  cp inventory.example.yaml inventory.yaml"
@@ -137,8 +133,8 @@ done < <(yq -r '.nodes[] | [.host, .ip, .role, .type, .imageSource, .imageFile, 
 [ "$(printf '%s\n' "${ALL_IPS[@]}" | sort -u | grep -c .)" -eq "${#ALL_IPS[@]}" ] \
   || die "inventory: two nodes share an IP"
 
-# installer_ref_for <host>: the installer image `talosctl upgrade` writes to that node. The ONE place the two
-# image sources are resolved, so the flasher and the upgrade cannot disagree about where a node's bits come from.
+# The installer image `talosctl upgrade` writes to a node. The ONE place the two image sources are resolved,
+# so the flasher and the upgrade cannot disagree about where a node's bits come from.
 installer_ref_for() {
   local h="$1"
   case "${NODE_IMAGE_SOURCE[$h]:-}" in
@@ -148,8 +144,8 @@ installer_ref_for() {
   esac
 }
 
-# factory_schematic_id <repo-relative path>: POST the extension set, get the id that addresses both the raw
-# image and the installer built from it. Idempotent server-side, so there is no id to pin and none to go stale.
+# POSTs the extension set and gets back the id that addresses both the raw image and the installer built from
+# it. Idempotent server-side, so there is no id to pin and none to go stale.
 _SCHEMATIC_ID=""
 factory_schematic_id() {
   [ -n "$_SCHEMATIC_ID" ] && { printf '%s\n' "$_SCHEMATIC_ID"; return 0; }
@@ -187,6 +183,7 @@ use_kubeconfig() {
   [ -f "$KUBECONFIG" ] || die "missing ${KUBECONFIG}, run step 03 (03c) first"
 }
 assert_api() { kubectl get nodes >/dev/null 2>&1 || die "kubectl can't reach the API via ${KUBECONFIG}"; }
+
 # Dockerized because the macOS talosctl build is unreliable here.
 # TALOS_SCRATCH (optional): a host temp dir mounted at /scratch for throwaway render files that must be
 # container-visible but must NOT persist in the durable secrets dir. Unset means not mounted.
@@ -220,7 +217,6 @@ wait_talos_api() {
 
 # The caller sets STEP=0 and STEP_TOTAL=<n> once; every step goes through step()/run_step(), so adding or
 # removing a step only changes STEP_TOTAL, never a hand-written number.
-
 step() { STEP=$((STEP+1)); say "STEP ${STEP}/${STEP_TOTAL}, $*"; }
 
 # run_step <label> <dir> <script> [best-effort] [hint]: runs <dir>/<script> in a subshell with stdin detached,
