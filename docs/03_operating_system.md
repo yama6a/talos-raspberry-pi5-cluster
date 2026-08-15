@@ -190,7 +190,7 @@ ping <node-ip>                                       # on the network
 nc -vz <node-ip> 50000                               # Talos API reachable
 talosctl -n <node-ip> version --insecure             # responds; server = our (-dirty) custom build
 talosctl -n <node-ip> get links --insecure           # end0 (the wired NIC) present/up
-talosctl -n <node-ip> get disks --insecure           # /dev/nvme0n1 present
+talosctl -n <node-ip> get disks --insecure           # the node's inventory installDisk present
 talosctl -n <node-ip> get kernelcmdlines --insecure  # cmdline has console=ttyAMA0,115200 (rpi5 overlay)
 ```
 
@@ -221,8 +221,8 @@ LoadBalancer, no L2 announcements, no gateway and no encryption, so a platform e
 deploy onto it unchanged. It is a bootstrap-time decision either way. Switching a live cluster between the two
 means a rebuild, not a `make reapply-talos-config`.
 
-> The cluster name, VIP, and the node list (hostname + IP per node) live in `.env`; the install disk + NIC are fixed
-> constants in `common.sh` (Pi 5 hardware). Nothing is hardcoded in the script: edit `.env` to match your network.
+> The cluster name and VIP live in `.env`; the node list, and each node's `installDisk`, live in `inventory.yaml`.
+> Nothing is hardcoded in the script: edit both to match your hardware and network.
 
 ### Router reservations (manual, once)
 
@@ -250,8 +250,8 @@ so I picked `192.168.100.1` for the VIP (inside the subnet, outside the DHCP ran
 
 ### What `03c_talos_cluster_config.sh` does
 
-1. Reads cluster name, install disk, EPHEMERAL cap, NIC, the VIP, and each node's hostname + IP from
-   `.env`, prints a summary, and waits for a `YES` confirmation.
+1. Reads cluster name, EPHEMERAL cap, NIC and the VIP from `.env`, and each node's hostname, IP and install
+   disk from `inventory.yaml`, prints a summary, and waits for a `YES` confirmation.
 2. Prepares the config. The durable secrets bundle (`secrets.yaml`, the cluster PKI: CA, service-account
    key, bootstrap/join tokens) is generated **once** and never rotated, so the cluster identity survives every
    re-run and rebuild. Everything else is **disposable scratch re-rendered each run**: `talosctl gen config

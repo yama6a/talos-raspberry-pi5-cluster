@@ -28,7 +28,7 @@ OUTDIR="${CLUSTER_DIR}"    # durable creds; the lib's talosctl() mounts it as /w
 # nothing to clean up. talosctl() mounts it at /scratch. Survives a mid-run failure for inspection.
 TALOS_SCRATCH="$(mktemp -d)"
 
-CLUSTER="$CLUSTER_NAME"; DISK="$INSTALL_DISK"; EPHEMERAL="$EPHEMERAL_SIZE"; VIP="$CLUSTER_VIP"; KVER="$KUBERNETES_VERSION"
+CLUSTER="$CLUSTER_NAME"; EPHEMERAL="$EPHEMERAL_SIZE"; VIP="$CLUSTER_VIP"; KVER="$KUBERNETES_VERSION"
 
 # ---- state ----
 REAPPLY=false             # set by parse_args
@@ -59,10 +59,9 @@ print_plan() {
   local h
   echo "Scratch:  ${TALOS_SCRATCH}   (throwaway render files; OS-reaped)"
   echo "== Talos cluster setup (talosctl ${TALOSCTL_VERSION}, dockerized) =="
-  echo "Cluster:  ${CLUSTER}     VIP: ${VIP}     NIC: ${IFACE}     k8s: ${KVER}"
-  echo "Disk:     ${DISK}        EPHEMERAL cap: ${EPHEMERAL}"
+  echo "Cluster:  ${CLUSTER}     VIP: ${VIP}     NIC: ${IFACE}     k8s: ${KVER}     EPHEMERAL cap: ${EPHEMERAL}"
   for h in "${TARGETS[@]}"; do
-    printf '  %-12s %-16s %-13s %s\n' "$h" "${NODE_IP[$h]}" "${NODE_ROLE[$h]}" "${NODE_TYPE[$h]}"
+    printf '  %-12s %-16s %-13s %-16s %s\n' "$h" "${NODE_IP[$h]}" "${NODE_ROLE[$h]}" "${NODE_TYPE[$h]}" "${NODE_INSTALL_DISK[$h]}"
   done
   if [ "$REAPPLY" = true ]; then
     echo "Mode:     REAPPLY to running nodes (--mode auto), NOT bootstrapping etcd"
@@ -112,12 +111,12 @@ ensure_secrets_bundle() {
 # Rendered FRESH each run from the durable secrets plus the CURRENT versions.env and .env, which is why the
 # config is split from the secrets: a version bump actually reaches the nodes instead of being frozen into a
 # controlplane.yaml we kept from last time. --with-secrets reuses secrets.yaml, so this never rotates PKI.
-# The worker base is not passed --install-image: the ref differs per hardware type, so it is patched per node
-# at apply time instead.
+# Neither base is passed --install-image or --install-disk: the installer ref follows the hardware type and the
+# disk follows the node, so both are patched per node at apply time. gen config still writes its own default
+# into machine.install.disk here; that value never reaches a node, the patch always overrides it.
 render_base_configs() {
   talosctl gen config "${CLUSTER}" "https://${VIP}:6443" \
     --with-secrets secrets.yaml \
-    --install-disk "${DISK}" \
     --kubernetes-version "${KVER}" \
     --output-types controlplane,talosconfig \
     --force
@@ -128,7 +127,6 @@ render_base_configs() {
   if [ "${#WORKER_HOSTS[@]}" -gt 0 ]; then
     talosctl gen config "${CLUSTER}" "https://${VIP}:6443" \
       --with-secrets secrets.yaml \
-      --install-disk "${DISK}" \
       --kubernetes-version "${KVER}" \
       --output-types worker \
       --force
@@ -241,6 +239,9 @@ EOF
 # provision time. Talos provisions a volume ONCE, so renaming this on a live cluster orphans the old partition
 # rather than renaming it.
 # Every node carries a disk, so the volume layout does not vary by role and both bases get the same docs.
+# `system_disk` is the disk this node was installed to, so both volumes follow the inventory's installDisk with
+# nothing to keep in sync. Matching on transport instead would miss a SATA node and pick the wrong drive on a
+# node with two NVMes.
 write_volume_config() {
 cat > "${TALOS_SCRATCH}/volumes.yaml" <<EOF
 ---
@@ -249,7 +250,7 @@ kind: VolumeConfig
 name: EPHEMERAL
 provisioning:
   diskSelector:
-    match: disk.transport == "nvme"
+    match: system_disk
   maxSize: ${EPHEMERAL}
 ---
 apiVersion: v1alpha1
@@ -257,7 +258,7 @@ kind: UserVolumeConfig
 name: storage
 provisioning:
   diskSelector:
-    match: disk.transport == "nvme"
+    match: system_disk
   minSize: 50GiB
 filesystem:
   type: xfs
@@ -304,26 +305,25 @@ assert_nodes_running() {
 # firmware-dependent and nothing here depends on it. The install disk is the exception, since getting that
 # wrong writes the wrong device.
 report_hardware() {
-  local host ip disks n
+  local host ip disks disk
   for host in "${TARGETS[@]}"; do
-    ip="${NODE_IP[$host]}"
+    ip="${NODE_IP[$host]}"; disk="${NODE_INSTALL_DISK[$host]}"
     say "${host} (${ip}, ${NODE_TYPE[$host]}) hardware"
     talosctl -e "$ip" -n "$ip" get cpus  --insecure 2>/dev/null | tail -n +2 | sed 's/^/   cpu   /' || true
     talosctl -e "$ip" -n "$ip" get links --insecure 2>/dev/null | tail -n +2 | sed 's/^/   link  /' || true
     disks="$(talosctl -e "$ip" -n "$ip" get disks --insecure 2>/dev/null || true)"
     printf '%s\n' "$disks" | tail -n +2 | sed 's/^/   disk  /'
-    grep -qE "[[:space:]/]${EXPECT_DISK}([[:space:]]|\$)" <<< "$disks" \
-      || die "${host} has no ${EXPECT_DISK}; --install-disk ${DISK} would write a device that is not there"
-    n="$(grep -oE '[[:space:]]nvme[0-9]+n[0-9]+[[:space:]]' <<< "$disks" | wc -l | tr -d ' ')"
-    [ "${n:-0}" -le 1 ] || warn "${host} shows ${n} NVMe disks; the volume diskSelector matches on transport, so it could pick either"
+    grep -qE "[[:space:]/]${disk##*/}([[:space:]]|\$)" <<< "$disks" \
+      || die "${host} has no ${disk}, so installing to it would write a device that is not there. Set its installDisk in inventory.yaml to one of the disks listed above."
   done
 }
 
 # Hostname goes through the HostnameConfig document (needs Talos >= 1.12), not machine.network.hostname: gen
 # config already ships a HostnameConfig (auto: stable), and setting both errors with "static hostname is
 # already set in v1alpha1 config".
-# install.image and the instance-type label are per NODE, not per role, so they ride in their own patch: the
-# installer ref follows the hardware type, and nic-keeper selects on the label.
+# install.image, install.disk and the instance-type label are per NODE, not per role, so they ride in their own
+# patch: the installer ref follows the hardware type, the disk is whatever that box boots from, and nic-keeper
+# selects on the label.
 # -e is not optional on the secure path: `gen config --force` rewrote talosconfig and a freshly generated one
 # carries NO endpoints. Without it the apply dies with "failed to determine endpoints". --insecure never
 # needed it, since that dials -n directly.
@@ -334,8 +334,8 @@ apply_to() {
     controlplane) base="/scratch/cp.yaml";     rpatch="/scratch/cp-patch.yaml" ;;
     worker)       base="/scratch/worker.yaml"; rpatch="/scratch/worker-patch.yaml" ;;
   esac
-  npatch="$(printf '{"machine":{"install":{"image":"%s"},"nodeLabels":{"node.kubernetes.io/instance-type":"%s"}}}' \
-            "$(installer_ref_for "$host")" "${NODE_TYPE[$host]}")"
+  npatch="$(printf '{"machine":{"install":{"image":"%s","disk":"%s"},"nodeLabels":{"node.kubernetes.io/instance-type":"%s"}}}' \
+            "$(installer_ref_for "$host")" "${NODE_INSTALL_DISK[$host]}" "${NODE_TYPE[$host]}")"
   talosctl apply-config -e "${ip}" -n "${ip}" -f "$base" \
     -p @"$rpatch" \
     -p "$npatch" \

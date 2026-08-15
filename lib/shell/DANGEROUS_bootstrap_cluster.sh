@@ -77,9 +77,9 @@ assert_nodes_in_maintenance() {
 }
 
 # Fatal run_step, and run BEFORE any creds are archived: 03b asserts each node booted OUR image, sees its
-# NVMe and has its wired NIC, which are exactly the failure modes that otherwise surface deep inside 03c.
+# install disk and has its wired NIC, which are exactly the failure modes that otherwise surface deep inside 03c.
 boot_verify_nodes() {
-  run_step "boot-verify every node (our image/NIC/NVMe/overlay)" "$STEP_DIR" 03b_talos_boot_verify.sh
+  run_step "boot-verify every node (our image/NIC/install disk/overlay)" "$STEP_DIR" 03b_talos_boot_verify.sh
 }
 
 # Moves EVERY file present, including dotfiles, so nothing lingers to make 03c reuse the old identity and

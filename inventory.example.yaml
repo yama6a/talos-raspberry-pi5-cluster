@@ -5,15 +5,19 @@
 # No versions here: they live in the committed versions.env, so one bump moves every node at once.
 # No architecture either: `imageFile` already names it, and the kubelet sets kubernetes.io/arch on the node.
 #
-# Six keys, and only `imageSchematic` is optional. Nothing else is a per-node knob, because nothing else is a
+# Seven keys, and only `imageSchematic` is optional. Nothing else is a per-node knob, because nothing else is a
 # CHOICE: which of 03b's checks run, and whether 03d hardens the NIC, both follow from `type`.
 #   host             the Kubernetes node name; Talos gets it via a HostnameConfig document
 #   ip               reserve it in your router; 03c applies config to this address
 #   role             controlplane | worker. controlplane nodes carry the VIP, etcd and the apiserver certSANs
 #   type             the hardware. Stamped as node.kubernetes.io/instance-type, which nic-keeper selects on
 #   imageSource      github-release | image-factory. Where this node's TWO artifacts come from, see below
-#   imageFile        the raw-image filename 03a downloads and writes to the NVMe
+#   imageFile        the raw-image filename 03a downloads and writes to the drive
 #   imageSchematic   REQUIRED for image-factory, and rejected otherwise: the extension set to build with
+#   installDisk      the whole-device path Talos installs to, as the NODE names it: /dev/nvme0n1, /dev/sda.
+#                    No default, because writing the wrong device is not something to guess at. It is also
+#                    where EPHEMERAL and the `storage` volume land, since both follow the system disk.
+#                    Read it off the node in maintenance mode: `make talosctl -- -n <ip> get disks --insecure`
 #
 # A node needs two different artifacts, and imageSource decides where BOTH come from:
 #
@@ -40,6 +44,7 @@ nodes:
     type: rpi5
     imageSource: github-release
     imageFile: metal-arm64-rpi5.raw.xz
+    installDisk: /dev/nvme0n1
 
   - host: talos-cp2
     ip: 192.168.1.12
@@ -47,6 +52,7 @@ nodes:
     type: rpi5
     imageSource: github-release
     imageFile: metal-arm64-rpi5.raw.xz
+    installDisk: /dev/nvme0n1
 
   - host: talos-cp3
     ip: 192.168.1.13
@@ -54,6 +60,7 @@ nodes:
     type: rpi5
     imageSource: github-release
     imageFile: metal-arm64-rpi5.raw.xz
+    installDisk: /dev/nvme0n1
 
   # A worker. Delete this block if you run control-plane only.
   - host: talos-w1
@@ -63,3 +70,4 @@ nodes:
     imageSource: image-factory
     imageFile: metal-amd64.raw.xz
     imageSchematic: lib/talos/schematic-amd64.yaml
+    installDisk: /dev/sda # this box boots off SATA, not NVMe

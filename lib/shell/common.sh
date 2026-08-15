@@ -38,7 +38,6 @@ source "$ENV_FILE"
 
 # Pinned by the hardware, not per-deployment, so not in .env.
 EXPECT_NIC="end0"          # Pi 5 wired NIC (the VIP binds to it)
-EXPECT_DISK="nvme0n1"      # the NVMe (install target)
 API_PORT=50000            # Talos API port
 GHCR_SERVER="ghcr.io"     # registry the GHCR pull token is scoped to
 TALOS_IMAGE_REPO="ghcr.io/yama6a/talos-raspberry-pi5"        # the Pi 5 Talos image; TALOS_IMAGE_RELEASE pins the tag
@@ -46,7 +45,6 @@ FACTORY_HOST="factory.talos.dev"                             # stock images for 
 
 # Cannot live in a flat .env: interpolation and a derived version.
 IFACE="${EXPECT_NIC}"                           # wired NIC the VIP binds to (dhcp + vip)
-INSTALL_DISK="/dev/${EXPECT_DISK}"              # nvme0n1 -> /dev/nvme0n1
 # The image release tag is `<talos version>-<build revision>`; everything Talos-side wants just the version.
 TALOS_VERSION="${TALOS_IMAGE_RELEASE%-*}"
 TALOSCTL_VERSION="${TALOS_VERSION}"             # talosctl container (talosctl() below; boot-verify)
@@ -98,7 +96,7 @@ INVENTORY="${REPO_ROOT}/inventory.yaml"
 [ -z "${CLUSTER_NODES:-}" ] || die "CLUSTER_NODES is still set in .env; the node list moved to inventory.yaml. Delete that line."
 require yq
 
-declare -A NODE_IP NODE_ROLE NODE_TYPE NODE_IMAGE_SOURCE NODE_IMAGE_FILE NODE_IMAGE_SCHEMATIC
+declare -A NODE_IP NODE_ROLE NODE_TYPE NODE_IMAGE_SOURCE NODE_IMAGE_FILE NODE_IMAGE_SCHEMATIC NODE_INSTALL_DISK
 ALL_HOSTS=(); ALL_IPS=()          # every node, in inventory order
 CP_HOSTS=();  CP_IPS=()           # role controlplane: these carry the VIP, etcd and the apiserver certSANs
 WORKER_HOSTS=(); WORKER_IPS=()    # role worker
@@ -108,9 +106,9 @@ WORKER_HOSTS=(); WORKER_IPS=()    # role worker
 # ONE yq call for the whole file, so sourcing costs a single subprocess however many nodes there are.
 # Joined on '|' and NOT @tsv: tab is an IFS whitespace character, so `read` collapses a run of them and the
 # optional imageSchematic would silently shift every later field one to the left.
-while IFS='|' read -r _h _ip _role _type _src _file _sch; do
+while IFS='|' read -r _h _ip _role _type _src _file _sch _disk; do
   [ -n "$_h" ] || continue
-  for _f in ip:"$_ip" role:"$_role" type:"$_type" imageSource:"$_src" imageFile:"$_file"; do
+  for _f in ip:"$_ip" role:"$_role" type:"$_type" imageSource:"$_src" imageFile:"$_file" installDisk:"$_disk"; do
     [ -n "${_f#*:}" ] || die "inventory: node '${_h}' is missing ${_f%%:*}"
   done
   case "$_role" in controlplane|worker) ;; *) die "inventory: node '${_h}' has role '${_role}', want controlplane or worker" ;; esac
@@ -121,13 +119,15 @@ while IFS='|' read -r _h _ip _role _type _src _file _sch; do
     image-factory)  [ -n "$_sch" ] || die "inventory: node '${_h}' is imageSource image-factory, so it needs an imageSchematic" ;;
     *) die "inventory: node '${_h}' has imageSource '${_src}', want github-release or image-factory" ;;
   esac
+  case "$_disk" in /dev/?*) ;; *) die "inventory: node '${_h}' has installDisk '${_disk}', want a whole-device path like /dev/nvme0n1 or /dev/sda" ;; esac
   [ -z "${NODE_IP[$_h]:-}" ] || die "inventory: '${_h}' appears twice"
   NODE_IP[$_h]="$_ip"; NODE_ROLE[$_h]="$_role"; NODE_TYPE[$_h]="$_type"
   NODE_IMAGE_SOURCE[$_h]="$_src"; NODE_IMAGE_FILE[$_h]="$_file"; NODE_IMAGE_SCHEMATIC[$_h]="$_sch"
+  NODE_INSTALL_DISK[$_h]="$_disk"
   ALL_HOSTS+=("$_h"); ALL_IPS+=("$_ip")
   if [ "$_role" = controlplane ]; then CP_HOSTS+=("$_h"); CP_IPS+=("$_ip")
   else                                 WORKER_HOSTS+=("$_h"); WORKER_IPS+=("$_ip"); fi
-done < <(yq -r '.nodes[] | [.host, .ip, .role, .type, .imageSource, .imageFile, (.imageSchematic // "")] | join("|")' "$INVENTORY")
+done < <(yq -r '.nodes[] | [.host, .ip, .role, .type, .imageSource, .imageFile, (.imageSchematic // ""), (.installDisk // "")] | join("|")' "$INVENTORY")
 
 [ "${#CP_HOSTS[@]}" -gt 0 ] || die "inventory: no node has role controlplane, so there is no cluster to build"
 [ "$(printf '%s\n' "${ALL_IPS[@]}" | sort -u | grep -c .)" -eq "${#ALL_IPS[@]}" ] \

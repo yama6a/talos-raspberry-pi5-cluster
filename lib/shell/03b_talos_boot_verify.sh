@@ -80,14 +80,16 @@ check_nic() {
 }
 
 check_install_disk() {
-  local ip="$1" out rc
+  local ip="$1" disk="$2" out rc
   out="$(tctl -n "$ip" get disks --insecure 2>&1)"; rc=$?
-  if [ $rc -eq 0 ] && echo "$out" | grep -qE "[[:space:]/]${EXPECT_DISK}([[:space:]]|\$)"; then
-    ok "NVMe /dev/${EXPECT_DISK} seen"
+  if [ $rc -eq 0 ] && echo "$out" | grep -qE "[[:space:]/]${disk##*/}([[:space:]]|\$)"; then
+    ok "install disk ${disk} seen"
   elif [ $rc -ne 0 ]; then
     bad "get disks --insecure failed: $(echo "$out" | tail -1)"
   else
-    bad "/dev/${EXPECT_DISK} not found in disks"
+    # Printed because the fix is to copy one of these into the node's installDisk.
+    bad "install disk ${disk} (inventory installDisk) not found; the node has:"
+    echo "$out" | tail -n +2 | sed 's/^/           /'
   fi
 }
 
@@ -113,7 +115,7 @@ verify_node() {
   check_reachable "$host" "$ip" || return 0
   check_talos_version "$ip"
   check_nic "$ip" "$type"
-  check_install_disk "$ip"
+  check_install_disk "$ip" "${NODE_INSTALL_DISK[$1]}"
   [ "$type" = rpi5 ] && check_rpi5_kernel "$ip"
   return 0
 }
@@ -124,7 +126,7 @@ print_result() {
   else
     echo "Some checks failed. This script runs talosctl via the container to avoid the"
     echo "native macOS 'no route to host' gotcha."
-    echo "Node never appears / NIC or NVMe missing -> see Troubleshooting in 03_operating_system.md."
+    echo "Node never appears / NIC or install disk missing -> see Troubleshooting in 03_operating_system.md."
   fi
 }
 

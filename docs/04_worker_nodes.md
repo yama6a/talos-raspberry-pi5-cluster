@@ -22,11 +22,19 @@ be 1, which would make the node-count gates compare against the wrong number.
 | `imageSource` | `github-release` or `image-factory`. Where this node's two artifacts come from |
 | `imageFile` | the raw-image filename 03a downloads and writes |
 | `imageSchematic` | required for `image-factory`, rejected otherwise: the extension set to build with |
+| `installDisk` | whole-device path Talos installs to, as the node names it: `/dev/nvme0n1`, `/dev/sda` |
 
-**Six keys, and only one optional.** Anything that is not a CHOICE is derived rather than stored. There is no
+**Seven keys, and only one optional.** Anything that is not a CHOICE is derived rather than stored. There is no
 `arch`, because `imageFile` already names it and the kubelet sets `kubernetes.io/arch` itself. There is no
 `bootVerify` or `nicHardening`, because which of 03b's checks run and whether 03d hardens the NIC both follow
 from `type`: properties of the hardware, not decisions.
+
+`installDisk` has no default, and that is the one place this file spends a keystroke rather than deriving.
+Defaulting it to `/dev/nvme0n1` would mean a mistyped or forgotten value installs to a device the operator never
+looked at, and a wrong install target is not a failure you want to discover late. 03b and 03c both check the
+node actually has it before anything is written. Read it off the node in maintenance mode with
+`talosctl -n <ip> get disks --insecure`. The `EPHEMERAL` and `storage` volumes follow it too: both select on
+`system_disk` rather than on transport, so a SATA node works with no extra config.
 
 `imageSource` is the exception, and it is deliberate. Its presence IS inferable, from whether the node has an
 `imageSchematic`, and an earlier version of this file did exactly that. It reads worse: the single most useful
