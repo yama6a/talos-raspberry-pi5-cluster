@@ -196,35 +196,38 @@ Short, because the NVMe arrives pre-installed and there is no boot medium to pri
 **Boot UEFI, never legacy/CSM.** Talos 1.10 split bootloaders: systemd-boot with a UKI for UEFI, GRUB kept only
 for legacy BIOS, and there is an open report of HP hardware failing to boot in legacy mode since
 (siderolabs/talos#13224). A consequence of the UKI: `machine.install.extraKernelArgs` is ignored on a UEFI
-install because the cmdline is baked in. Kernel args would need `customization.extraKernelArgs` in the
-schematic; none are needed here.
+install because the cmdline is baked in. Kernel args go in `customization.extraKernelArgs` in the schematic
+instead, which is where `talos.dashboard.disabled=1` lives.
 
-## The x86 iGPU
+## What the x86 schematic carries
 
-`siderolabs/i915` in `lib/talos/schematic-amd64.yaml` is what gives the box a working Intel iGPU. Talos builds
-`i915` as a module and ships neither the module nor `/usr/lib/firmware/i915` in the base image, so without the
-extension there is no driver, no `/dev/dri`, and every transcode falls back to software.
+`lib/talos/schematic-amd64.yaml`. Talos ships `i915` as a module and puts neither it nor
+`/usr/lib/firmware/i915` in the base image, so without the extension the box has no `/dev/dri` at all and every
+transcode is software.
 
-- `i915` covers Gen9 through Xe1. Xe2 (Lunar Lake) and newer want `siderolabs/xe` instead.
-- Not needed, despite what every guide on this says: `siderolabs/mei` is for Arc DISCRETE cards, and
-  `siderolabs/intel-ice-firmware` is E810 NIC firmware.
-- Talos labels the node `extensions.talos.dev/i915: <firmware date>` by itself. A GPU device plugin can select
-  on that key, so node-feature-discovery buys nothing here.
-- `/dev/dri/renderD128` lands `0666` (`50-udev-default.rules`), and Talos has no `/etc/group` for the `render`
-  group to resolve against, so a pod needs no `supplementalGroups` to open it. `card0` stays `0600`, but
-  transcoding only ever touches the render node.
-- HuC firmware for low-power encode is off by default on Gen9.5 and stays off. Turning it on means
-  `i915.enable_guc=2` in `customization.extraKernelArgs`, per the UKI note above.
+- `i915` covers Gen9 through Xe1. Xe2 (Lunar Lake) and newer want `siderolabs/xe`.
+- `siderolabs/mei` is for Arc DISCRETE cards and `siderolabs/intel-ice-firmware` is E810 NIC firmware. Most
+  guides list both for an iGPU. Neither does anything here.
+- Talos labels the node `extensions.talos.dev/i915`, so a device plugin selects on that and
+  node-feature-discovery buys nothing.
+- `/dev/dri/renderD128` lands `0666` (`50-udev-default.rules`) and there is no `/etc/group` for `render` to
+  resolve against, so a consumer needs no `supplementalGroups`. `card0` stays `0600`; transcoding only touches
+  the render node.
+- HuC for low-power encode is off on Gen9.5 and stays off. To try it: `i915.enable_guc=2` in
+  `extraKernelArgs`.
+- `talos.dashboard.disabled=1`: only a node with a console starts a dashboard, and machined access-logs every
+  poll feeding it. Talos defaults it to 1 on SBCs, so it only bit the x86 box. `talosctl dashboard` still works.
 
-**Reapply BEFORE you upgrade.** Editing the schematic changes its content hash, so the factory hands back a new
-id and a new installer ref. `talosctl upgrade` installs that image but never rewrites the stored
-`machine.install.image`, so a node upgraded without a reapply still carries the OLD ref and a later recovery
-reinstalls it without the GPU.
+**Reapply BEFORE you upgrade.** A schematic edit changes its content hash, so the factory returns a new id and
+installer ref. `talosctl upgrade` installs the image but never rewrites the stored `machine.install.image`, so
+upgrading without a reapply leaves the node pointing at the OLD ref and a later recovery reinstalls it without
+these.
 
 ```
 make reapply-talos-config NODE=tc-w1
 make upgrade-talos
 ```
 
-`upgrade-talos` walks every node, but a node already on its target image completes immediately, so the Pis cost
-a drain cycle each and nothing more.
+`upgrade-talos` walks every node, and only skips one whose installed image already matches. Expect a full
+reboot per node whenever `versions.env` is ahead of what a node runs.
+
