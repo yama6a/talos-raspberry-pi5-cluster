@@ -110,7 +110,18 @@ graceful drain can only kill them, and they come back on the same node after the
 1. Waits until every replicated store is healthy and in sync, if a hook says so (see below).
 2. Cordons, runs a bounded graceful drain, then force-deletes any straggler so the node can always reboot.
 
-Talos's own in-upgrade drain then finds an empty node and completes instantly.
+Talos's own in-upgrade drain then finds an empty node and completes instantly. Usually. When step 2's graceful
+drain times out, the force-delete that follows carries a 20s grace and returns before the pod is actually gone,
+so Talos's drain can start on a node that still holds a terminating one and fail on it:
+
+```
+error when evicting pods/"instance-manager-..." -n "longhorn-system":
+client rate limiter Wait returned an error: rate: Wait(n=1) would exceed context deadline
+```
+
+`03e` aborts there with the cluster untouched and the node uncordoned, so just re-run it: it skips the nodes
+already done and the pod is long gone by then. If it recurs on the same node, raise `GRACEFUL_DRAIN_TIMEOUT`
+so the polite drain finishes instead of escalating, rather than lowering `FORCE_GRACE`.
 
 A storage layer that offers to drain replicas off the node first is deliberately left switched off: evicting and
 rebuilding replicas elsewhere needs a spare node and is slow, which is exactly what times out on a 3-node,
