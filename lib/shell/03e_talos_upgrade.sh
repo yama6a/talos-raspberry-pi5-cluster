@@ -9,7 +9,7 @@ source "${SCRIPT_DIR}/common.sh"
 # ---- knobs ----
 HEALTH_TIMEOUT=1800   # secs per node for reboot + installer pull + rejoin; nodes pull over your home link
 REPLICATION_HEALTH_TIMEOUT=1800  # secs to wait for PRE_DRAIN_HEALTH_HOOK before draining each node
-GRACEFUL_DRAIN_TIMEOUT=120  # secs of polite drain (honors eviction) before escalating to force
+GRACEFUL_DRAIN_TIMEOUT=600  # secs of polite drain (honors eviction) before escalating to force
 FORCE_GRACE=20              # secs grace on the force-delete of stragglers (let them flush; 0=now)
 
 # ---- state ----
