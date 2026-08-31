@@ -34,7 +34,10 @@ source "$ENV_FILE"
 : "${GITHUB_GHCR_PULL_TOKEN_SECRET:=}"    # 03c bakes into node machine config (kubelet pulls private ghcr.io)
 : "${DISABLE_FLANNEL_AND_KUBE_PROXY:=true}"   # defaults to no CNI and no kube-proxy, for a cluster installing its own
 : "${PRE_DRAIN_HEALTH_HOOK:=}"            # 03e runs it before draining each node; empty = nothing gates store health
+: "${PRE_DRAIN_EVACUATE_HOOK:=}"          # 03e runs it once per node after that gate; empty = nothing moves off first
+: "${FORCE_DELETE_SKIP:=}"                # label selector 03e's force-delete spares; empty = it kills every pod on the node
 : "${REBALANCE_SKIP_NAMESPACES:=}"        # 03g leaves these namespaces alone; empty = restart every stateless Deployment
+: "${REBALANCE_PVC_NAMESPACES:=}"         # 03g restarts PVC-mounting Deployments here too; empty = a PVC always means skip
 
 # Pinned by the hardware, not per-deployment, so not in .env.
 EXPECT_NIC="end0"          # Pi 5 wired NIC (the VIP binds to it)

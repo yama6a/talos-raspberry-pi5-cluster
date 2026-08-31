@@ -11,6 +11,10 @@ source "${SCRIPT_DIR}/common.sh"
 # comes from .env. Typically the CSI driver's namespace (its sidecars may be mid-volume-op) and the ingress
 # data plane.
 SKIP_NAMESPACES="$REBALANCE_SKIP_NAMESPACES"
+# A PVC alone does not make a Deployment unmovable: with `Recreate` the old pod releases the volume before the
+# new one wants it. Opting a namespace in here says its volumes can follow the pod. `RollingUpdate` is still
+# skipped even here, see select_deployments.
+PVC_NAMESPACES="$REBALANCE_PVC_NAMESPACES"
 ROLLOUT_TIMEOUT=300   # secs per Deployment; restarts are serial, maxSurge doubles pods and 3 Pi 5s are RAM-tight
 
 # ---- state ----
@@ -46,15 +50,18 @@ pods_per_node() {
 
 # Statelessness is tested by looking for a PVC, not by name: operator-generated names (vmsingle-<cr>) rot.
 select_deployments() {
-  SELECTION="$(kubectl get deploy -A -o json | SKIP_NS="$SKIP_NAMESPACES" python3 -c '
+  SELECTION="$(kubectl get deploy -A -o json | SKIP_NS="$SKIP_NAMESPACES" PVC_NS="$PVC_NAMESPACES" python3 -c '
 import json,os,sys
 skip_ns = set(os.environ["SKIP_NS"].split())
+pvc_ns  = set(os.environ["PVC_NS"].split())
 for d in json.load(sys.stdin)["items"]:
     ns, name = d["metadata"]["namespace"], d["metadata"]["name"]
     spec = d["spec"]
     pvcs = [v for v in (spec["template"]["spec"].get("volumes") or []) if "persistentVolumeClaim" in v]
+    rolling = spec.get("strategy", {}).get("type", "RollingUpdate") == "RollingUpdate"
     if   ns in skip_ns:              verdict = "SKIP\tnamespace in SKIP_NAMESPACES"
-    elif pvcs:                       verdict = "SKIP\tmounts a PVC, not stateless"
+    elif pvcs and ns not in pvc_ns:  verdict = "SKIP\tmounts a PVC (add ns to REBALANCE_PVC_NAMESPACES to move it)"
+    elif pvcs and rolling:           verdict = "SKIP\tmounts a PVC and rolls: maxSurge wants the volume on two nodes at once"
     elif not spec.get("replicas"):   verdict = "SKIP\tscaled to 0"
     else:                            verdict = "DO\t"
     print(f"{verdict}\t{ns}\t{name}")

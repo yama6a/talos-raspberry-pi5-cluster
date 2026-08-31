@@ -90,13 +90,29 @@ wait_replication_healthy() {
 # Do NOT shorten GRACEFUL_DRAIN_TIMEOUT below the time a database switchover needs: an operator that moves the
 # primary away first has its eviction REFUSED by its own PDB until the handover is done, so force-deleting it
 # early turns a short switchover into a much longer failover.
+# Moves roles that must survive off the node first: a database primary force-deleted at FORCE_GRACE can end up
+# unable to pg_rewind and never rejoin, while a replica killed the same way just re-syncs. Runs ONCE and is
+# never retried, unlike the health gate above: it mutates, so a poll loop would keep re-electing. Non-zero
+# aborts before the cordon, so an abort here leaves the node untouched.
+evacuate_node() {
+  local node="$1"
+  [ -n "$PRE_DRAIN_EVACUATE_HOOK" ] || return 0
+  [ -x "$PRE_DRAIN_EVACUATE_HOOK" ] || die "PRE_DRAIN_EVACUATE_HOOK is not executable: ${PRE_DRAIN_EVACUATE_HOOK}"
+  say "moving roles off ${node} ($(basename "$PRE_DRAIN_EVACUATE_HOOK"))"
+  NODE="$node" "$PRE_DRAIN_EVACUATE_HOOK" \
+    || die "could not move roles off ${node}. Nothing was drained; fix and re-run (idempotent, skips done nodes)."
+}
+
 drain_node() {
   local node="$1"
   kubectl cordon "$node" >/dev/null
   if ! kubectl drain "$node" --ignore-daemonsets --delete-emptydir-data \
         --timeout="${GRACEFUL_DRAIN_TIMEOUT}s" >/dev/null 2>&1; then
     warn "graceful drain of ${node} timed out; force-deleting stragglers"
+    # The selector is node-wide, so ONE wedged pod force-kills every other pod on the node too. Empty keeps
+    # that; set FORCE_DELETE_SKIP to spare anything that will not come back from it.
     kubectl delete pod --all-namespaces --field-selector "spec.nodeName=${node}" \
+      ${FORCE_DELETE_SKIP:+--selector "$FORCE_DELETE_SKIP"} \
       --force --grace-period="${FORCE_GRACE}" >/dev/null 2>&1 || true
   fi
 }
@@ -117,6 +133,11 @@ upgrade_host() {
 
   # Gated before cordoning, so an abort here leaves no stray cordon.
   say "checking replicated stores are healthy + in sync before draining ${node} (${ip})"
+  wait_replication_healthy "$node"
+
+  # Healthy FIRST, then move roles: a switchover into a cluster that is still rebuilding picks a replica that
+  # is not caught up. The second gate then covers the switchover's own resync before anything is drained.
+  evacuate_node "$node"
   wait_replication_healthy "$node"
 
   say "draining ${node}"
