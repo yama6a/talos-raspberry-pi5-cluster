@@ -60,7 +60,7 @@ check_talos_version() {
 # Asserted by NAME only on rpi5, where end0 is fixed and the VIP binds to it. On any other type the name comes
 # from firmware and we hold no expectation, so print what it has and let a human read it.
 check_nic() {
-  local ip="$1" type="$2" out rc state
+  local ip="$1" type="$2" out rc state indent='           '
   out="$(tctl -n "$ip" get links --insecure 2>&1)"; rc=$?
   if [ $rc -ne 0 ]; then
     bad "get links --insecure failed: $(echo "$out" | tail -1)"
@@ -75,7 +75,7 @@ check_nic() {
     # Printed, not parsed: the KIND column is empty for a physical NIC, so the field count differs per row and
     # picking one out by position is guesswork.
     ok "links readable, no name asserted on ${type}. Its wired NIC is one of:"
-    echo "$out" | sed 's/^/           /'
+    printf '%s\n' "${indent}${out//$'\n'/$'\n'${indent}}"
   fi
 }
 
