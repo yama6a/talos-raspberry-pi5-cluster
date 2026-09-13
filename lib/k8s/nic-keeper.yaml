@@ -1,0 +1,167 @@
+# The runtime half of the Pi 5 macb NIC-wedge mitigation; 03d is the machine-config half and applies this.
+# One pod per rpi5 node: EEE-off, a link watchdog, and a post-recovery socket drop. See
+# docs/03_operating_system.md ("NIC hardening").
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nic-keeper
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: nic-keeper
+data:
+  nic-keeper.sh: |
+    #!/bin/sh
+    # Only ever touches $IFACE. Every sleep is bounded so the loop always makes progress and never
+    # trips the 03d hardware watchdog.
+    set -u
+
+    # ---- knobs ----
+    IFACE="end0"                        # the ONLY NIC this touches. Same Pi 5 wired NIC as EXPECT_NIC in common.sh
+    PING_TARGET=""                      # empty = auto-detect the default gateway via `ip route` at runtime
+    CHECK_INTERVAL=5
+    FAIL_THRESHOLD=4                    # consecutive probe failures before a recovery
+    LINK_DOWN_SECONDS=2                 # how long the link stays down during a bounce
+    COOLDOWN=60                         # post-recovery quiet period, anti-flap
+    SS_KILL_FILTER="dport = :6443"      # post-recovery socket drop, so kubelet reconnects to the VIP cleanly
+    # EEE is what wedges the link, so it is turned off at start and after every bounce regardless. This
+    # would additionally re-assert it on every probe cycle.
+    EEE_REASSERT_EACH_CYCLE="false"
+    PING_TIMEOUT=2                      # bounded < CHECK_INTERVAL
+
+    SS_KILL_OK=1
+    count=0
+
+    log() { ev="$1"; shift; printf '%s nic-keeper iface=%s event=%s %s\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$IFACE" "$ev" "$*"; }
+
+    # EEE off: no EthernetConfig field exists for it, so it lives here. Needs a recent-enough kernel on Pi5.
+    eee_off() {
+      if out="$(ethtool --set-eee "$IFACE" eee off 2>&1)"; then
+        log eee-off "ok"
+      else
+        log eee-unsupported "ethtool --set-eee failed (needs a recent-enough kernel on Pi5): ${out}"
+      fi
+    }
+
+    # Probe `ss -K` support once. Killing a socket needs the kernel built with CONFIG_INET_DIAG_DESTROY, and
+    # not every kernel is, so check rather than assume and log a skip if it is missing.
+    probe_ss() {
+      out="$(ss -K dport = :0 2>&1)"
+      if printf '%s' "$out" | grep -qi 'not supported'; then
+        SS_KILL_OK=0
+        log ss-k-unsupported "kernel lacks CONFIG_INET_DIAG_DESTROY, socket-drop step disabled: ${out}"
+      fi
+    }
+
+    resolve_target() {
+      [ -n "$PING_TARGET" ] && return 0
+      PING_TARGET="$(ip route show default 2>/dev/null | awk '/default/{print $3; exit}')"
+      [ -n "$PING_TARGET" ] && log target-resolved "gateway=$PING_TARGET"
+    }
+
+    # A wedge is link-up-but-no-traffic, so carrier alone cannot catch it, the active ping is the real signal.
+    # A bounce can re-enable EEE, hence the re-assert.
+    recover() {
+      carrier="$(cat "/sys/class/net/$IFACE/carrier" 2>/dev/null || echo '?')"
+      log wedge "fail_count=$count threshold=$FAIL_THRESHOLD carrier=$carrier (bouncing link)"
+      ip link set "$IFACE" down
+      sleep "$LINK_DOWN_SECONDS"
+      ip link set "$IFACE" up
+      eee_off
+      if [ "$SS_KILL_OK" = 1 ]; then
+        killed="$(ss -K $SS_KILL_FILTER 2>&1)"
+        log ss-kill "filter='$SS_KILL_FILTER' result='${killed:-none}'"
+      fi
+      count=0
+      log recovery "link bounced + eee re-asserted; cooldown=${COOLDOWN}s"
+      sleep "$COOLDOWN"
+    }
+
+    resolve_target
+    probe_ss
+    eee_off
+    log start "target=${PING_TARGET:-<unresolved>} interval=${CHECK_INTERVAL}s threshold=$FAIL_THRESHOLD cooldown=${COOLDOWN}s"
+
+    while true; do
+      resolve_target
+      if [ -z "$PING_TARGET" ]; then
+        log probe-skip "no default gateway yet, cannot probe"
+        sleep "$CHECK_INTERVAL"
+        continue
+      fi
+      carrier="$(cat "/sys/class/net/$IFACE/carrier" 2>/dev/null || echo '?')"
+      if ping -c 1 -W "$PING_TIMEOUT" "$PING_TARGET" >/dev/null 2>&1; then
+        [ "$count" -ne 0 ] && log probe-recovered "carrier=$carrier after $count fail(s)"
+        count=0
+        [ "$EEE_REASSERT_EACH_CYCLE" = "true" ] && eee_off
+      else
+        count=$((count + 1))
+        log probe-fail "target=$PING_TARGET carrier=$carrier count=$count/$FAIL_THRESHOLD"
+        [ "$count" -ge "$FAIL_THRESHOLD" ] && recover
+      fi
+      sleep "$CHECK_INTERVAL"
+    done
+---
+# hostNetwork so it sees and acts on the host NIC and host-netns sockets. Never calls the k8s API, hence
+# automountServiceAccountToken: false. kube-system because Talos exempts it from Pod Security, which the
+# NET_ADMIN capability needs.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nic-keeper
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: nic-keeper
+spec:
+  revisionHistoryLimit: 0  # recovery is a git revert plus a re-apply, never a rollback, so history is dead weight
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nic-keeper
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nic-keeper
+    spec:
+      hostNetwork: true
+      hostPID: false
+      dnsPolicy: ClusterFirstWithHostNet
+      automountServiceAccountToken: false
+      priorityClassName: system-node-critical
+      # The nodeSelector below already narrows this to one hardware type, so tolerate every taint: the keeper
+      # has to reach a node that is under pressure or tainted out-of-service, which is when its NIC has wedged.
+      # The not-ready toleration the DaemonSet controller adds is also what lets 03d apply this before a CNI.
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        - operator: Exists
+      # Everything this agent does is specific to the Pi 5 macb NIC, so it must not land on any other hardware
+      # type. 03c stamps instance-type from the node's `type` in inventory.yaml.
+      nodeSelector:
+        node.kubernetes.io/instance-type: rpi5
+      containers:
+        - name: nic-keeper
+          # Any replacement must ship ethtool, iproute2 (ip + ss) and ping: Talos has no host shell.
+          # renovate: datasource=docker
+          image: "nicolaka/netshoot:v0.16@sha256:b09d9b21381f47a79b3cbcb30da25266dc17186ea00ae65e99fdc51396f48e70"
+          command: ["/bin/sh", "/scripts/nic-keeper.sh"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              # NET_ADMIN for ethtool EEE, `ip link` and `ss -K`. NET_RAW for ping's ICMP socket, which
+              # drop:ALL would otherwise remove, false-failing every probe into a false wedge.
+              add: ["NET_ADMIN", "NET_RAW"]
+          volumeMounts:
+            - {name: scripts, mountPath: /scripts, readOnly: true}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 64Mi}
+      volumes:
+        - name: scripts
+          configMap:
+            name: nic-keeper
+            defaultMode: 0555

@@ -1,0 +1,51 @@
+# Static checks only, no cluster. `main` has no branch protection, so nothing here is a required check yet;
+# if you add protection (docs/06_renovate.md), each job NAME becomes the context to require.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  shell:
+    name: shell
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # -e SC2034 is "X appears unused", which fires on common.sh's shared constants. They ARE used,
+      # by the scripts that source it, but shellcheck reads one file at a time so it never sees the use.
+      - uses: yama6a/gha/.github/actions/shellcheck@v1
+        with:
+          glob: lib/shell/*.sh
+          exclude: SC2034
+
+  yaml:
+    name: yaml
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: yama6a/gha/.github/actions/yaml-checks@v1
+      # Schema-checks what 03d applies. Core types only, so the CRD catalog is not needed, and a
+      # kind with no schema is a mistake here rather than something to skip.
+      - uses: yama6a/gha/.github/actions/kubeconform@v1
+        with:
+          paths: lib/k8s/*.yaml
+          crd-catalog: 'false'
+          ignore-missing-schemas: 'false'
+
+  renovate-config:
+    name: renovate-config
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # A broken config silently halts ALL dependency updates.
+      - uses: yama6a/gha/.github/actions/validate-renovate-config@v1
+        with:
+          config-file: renovate.json5
