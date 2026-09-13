@@ -7,8 +7,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 
 # ---- knobs ----
-EXPECT_TALOS="$TALOS_VERSION"                # our build's Talos version (a local "-dirty" build matches too)
-EXPECT_CMDLINE="console=ttyAMA0,115200"      # rpi5 overlay signature in the kernel cmdline
+EXPECT_TALOS="$TALOS_VERSION"           # our build's Talos version (a local "-dirty" build matches too)
+EXPECT_CMDLINE="console=ttyAMA0,115200" # rpi5 overlay signature in the kernel cmdline
 
 # ---- functions ----
 
@@ -19,9 +19,9 @@ tctl() {
 }
 
 pull_talosctl() {
-  docker info >/dev/null 2>&1 || die "docker not running (needed for the talosctl container)"
+  docker info > /dev/null 2>&1 || die "docker not running (needed for the talosctl container)"
   say "pulling ghcr.io/siderolabs/talosctl:${TALOSCTL_VERSION} (first run only)"
-  docker pull -q "ghcr.io/siderolabs/talosctl:${TALOSCTL_VERSION}" >/dev/null
+  docker pull -q "ghcr.io/siderolabs/talosctl:${TALOSCTL_VERSION}" > /dev/null
 }
 
 # The Talos API is the verdict; ICMP is only context. A Pi 5 in maintenance drops sparse pings while TCP stays
@@ -30,8 +30,8 @@ pull_talosctl() {
 # the real checks. Three packets rather than one, for the same reason.
 check_reachable() {
   local host="$1" ip="$2" icmp
-  if ping -c3 -t10 "$ip" >/dev/null 2>&1; then icmp="ok"; else icmp="no reply"; fi
-  if nc -z -G2 "$ip" "$API_PORT" >/dev/null 2>&1; then
+  if ping -c3 -t10 "$ip" > /dev/null 2>&1; then icmp="ok"; else icmp="no reply"; fi
+  if nc -z -G2 "$ip" "$API_PORT" > /dev/null 2>&1; then
     ok "reachable, Talos API port ${API_PORT} open (icmp: ${icmp})"
     [ "$icmp" = "ok" ] || warn "${host} did not answer ICMP; harmless here, the API is what the bring-up needs"
     return 0
@@ -43,7 +43,8 @@ check_reachable() {
 # Catches a drive flashed from a stale cached image, on any hardware type.
 check_talos_version() {
   local ip="$1" out rc sv
-  out="$(tctl -n "$ip" version --insecure 2>&1)"; rc=$?
+  out="$(tctl -n "$ip" version --insecure 2>&1)"
+  rc=$?
   if [ $rc -ne 0 ] || ! echo "$out" | grep -q 'Server:'; then
     bad "version --insecure failed: $(echo "$out" | tail -1)"
     return 0
@@ -61,7 +62,8 @@ check_talos_version() {
 # from firmware and we hold no expectation, so print what it has and let a human read it.
 check_nic() {
   local ip="$1" type="$2" out rc state indent='           '
-  out="$(tctl -n "$ip" get links --insecure 2>&1)"; rc=$?
+  out="$(tctl -n "$ip" get links --insecure 2>&1)"
+  rc=$?
   if [ $rc -ne 0 ]; then
     bad "get links --insecure failed: $(echo "$out" | tail -1)"
   elif [ "$type" = rpi5 ]; then
@@ -81,7 +83,8 @@ check_nic() {
 
 check_install_disk() {
   local ip="$1" disk="$2" out rc
-  out="$(tctl -n "$ip" get disks --insecure 2>&1)"; rc=$?
+  out="$(tctl -n "$ip" get disks --insecure 2>&1)"
+  rc=$?
   if [ $rc -eq 0 ] && echo "$out" | grep -qE "[[:space:]/]${disk##*/}([[:space:]]|\$)"; then
     ok "install disk ${disk} seen"
   elif [ $rc -ne 0 ]; then
@@ -98,7 +101,8 @@ check_install_disk() {
 # signature worth asserting, so other hardware types get nothing to check.
 check_rpi5_kernel() {
   local ip="$1" out rc
-  out="$(tctl -n "$ip" get kernelcmdlines -o yaml --insecure 2>&1)"; rc=$?
+  out="$(tctl -n "$ip" get kernelcmdlines -o yaml --insecure 2>&1)"
+  rc=$?
   if [ $rc -eq 0 ] && echo "$out" | grep -qF "$EXPECT_CMDLINE"; then
     ok "Pi 5 overlay/kernel booted (cmdline has ${EXPECT_CMDLINE})"
   elif [ $rc -ne 0 ]; then

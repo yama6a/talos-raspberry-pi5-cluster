@@ -15,10 +15,10 @@ SKIP_NAMESPACES="$REBALANCE_SKIP_NAMESPACES"
 # new one wants it. Opting a namespace in here says its volumes can follow the pod. `RollingUpdate` is still
 # skipped even here, see select_deployments.
 PVC_NAMESPACES="$REBALANCE_PVC_NAMESPACES"
-ROLLOUT_TIMEOUT=300   # secs per Deployment; restarts are serial, maxSurge doubles pods and 3 Pi 5s are RAM-tight
+ROLLOUT_TIMEOUT=300 # secs per Deployment; restarts are serial, maxSurge doubles pods and 3 Pi 5s are RAM-tight
 
 # ---- state ----
-SELECTION=""   # set by select_deployments: "DO|SKIP<TAB>reason<TAB>ns<TAB>name" per line
+SELECTION="" # set by select_deployments: "DO|SKIP<TAB>reason<TAB>ns<TAB>name" per line
 
 # ---- functions ----
 
@@ -77,10 +77,11 @@ restart_deployments() {
   say "restarting $(printf '%s\n' "$targets" | grep -c .) deployments, one at a time"
   while IFS=$'\t' read -r ns name; do
     [ -n "$ns" ] || continue
-    if ! kubectl -n "$ns" rollout restart "deployment/${name}" >/dev/null 2>&1; then
-      bad "${ns}/${name} (restart not accepted)"; continue
+    if ! kubectl -n "$ns" rollout restart "deployment/${name}" > /dev/null 2>&1; then
+      bad "${ns}/${name} (restart not accepted)"
+      continue
     fi
-    if kubectl -n "$ns" rollout status "deployment/${name}" --timeout="${ROLLOUT_TIMEOUT}s" >/dev/null 2>&1; then
+    if kubectl -n "$ns" rollout status "deployment/${name}" --timeout="${ROLLOUT_TIMEOUT}s" > /dev/null 2>&1; then
       ok "${ns}/${name}"
     else
       bad "${ns}/${name} (not Available within ${ROLLOUT_TIMEOUT}s, check: kubectl -n ${ns} describe deploy ${name})"

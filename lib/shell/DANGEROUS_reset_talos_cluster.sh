@@ -12,8 +12,8 @@ source "${SCRIPT_DIR}/common.sh"
 # dropped from the config belongs in `talosctl wipe disk <part> --drop-partition` instead.
 # BOOT/EFI/META are kept, so nodes reboot straight to maintenance with no reflash.
 WIPE_LABELS="STATE,EPHEMERAL,u-storage"
-RESET_TIMEOUT="10m"   # per node. talosctl's own default is 30m, which just retries silently for half an hour
-MAINT_WAIT=300        # secs for a reset worker to answer the maintenance API again
+RESET_TIMEOUT="10m" # per node. talosctl's own default is 30m, which just retries silently for half an hour
+MAINT_WAIT=300      # secs for a reset worker to answer the maintenance API again
 
 # ---- functions ----
 
@@ -21,7 +21,8 @@ MAINT_WAIT=300        # secs for a reset worker to answer the maintenance API ag
 # the interleaved streams stay readable; that prefixing pipes through sed, and a pipeline's exit code is sed's,
 # so PIPESTATUS[0] is how we still see whether talosctl failed.
 reset_group() {
-  local label="$1"; shift
+  local label="$1"
+  shift
   local ips=("$@") pids=() fail=0 ip i rc
   say "resetting ${#ips[@]} ${label} node(s) in parallel (${WIPE_LABELS}) -> maintenance"
   for ip in "${ips[@]}"; do
@@ -61,22 +62,31 @@ reset_workers() {
   say "confirming every worker is back on the maintenance API before the control plane goes"
   for ip in "${WORKER_IPS[@]}"; do
     printf '   %-16s ' "$ip"
-    wait_talos_api "$ip" "$MAINT_WAIT" insecure || { echo "TIMEOUT"; die \
-      "${ip} did not come back in maintenance within ${MAINT_WAIT}s. The control plane is still UP: fix this
-       node and re-run. Do NOT reset the control plane first, or this node loses its apid and needs a reflash."; }
+    wait_talos_api "$ip" "$MAINT_WAIT" insecure || {
+      echo "TIMEOUT"
+      die \
+        "${ip} did not come back in maintenance within ${MAINT_WAIT}s. The control plane is still UP: fix this
+       node and re-run. Do NOT reset the control plane first, or this node loses its apid and needs a reflash."
+    }
     echo "maintenance"
   done
 }
 
 reset_control_plane() {
   reset_group control-plane "${CP_IPS[@]}" \
-    || { echo ">> one or more control-plane nodes failed to reset." >&2; exit 1; }
+    || {
+      echo ">> one or more control-plane nodes failed to reset." >&2
+      exit 1
+    }
 }
 
 # ---- main ----
 
 confirm_word_always YES "Destroy ENTIRE Talos cluster AND wipe ALL persistent data (u-storage)?" \
-  || { echo "skipped destruction (phew!)."; exit 0; }
+  || {
+    echo "skipped destruction (phew!)."
+    exit 0
+  }
 
 reset_workers
 reset_control_plane
