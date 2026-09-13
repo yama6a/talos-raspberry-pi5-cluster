@@ -7,29 +7,29 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 
 # ---- knobs ----
-HEALTH_TIMEOUT=1800   # secs per node for reboot + installer pull + rejoin; nodes pull over your home link
-REPLICATION_HEALTH_TIMEOUT=1800  # secs to wait for PRE_DRAIN_HEALTH_HOOK before draining each node
-GRACEFUL_DRAIN_TIMEOUT=600  # secs of polite drain (honors eviction) before escalating to force
-FORCE_GRACE=20              # secs grace on the force-delete of stragglers (let them flush; 0=now)
+HEALTH_TIMEOUT=1800             # secs per node for reboot + installer pull + rejoin; nodes pull over your home link
+REPLICATION_HEALTH_TIMEOUT=1800 # secs to wait for PRE_DRAIN_HEALTH_HOOK before draining each node
+GRACEFUL_DRAIN_TIMEOUT=600      # secs of polite drain (honors eviction) before escalating to force
+FORCE_GRACE=20                  # secs grace on the force-delete of stragglers (let them flush; 0=now)
 
 # ---- state ----
 # Workers FIRST: a worker holds no etcd, so an upgrade that wedges there costs no quorum and you find out
 # before touching a member. Each node gets the installer its own hardware type is built from.
 HOSTS=("${WORKER_HOSTS[@]}" "${CP_HOSTS[@]}")
-DRAINING_NODE=""   # set around each drain; the EXIT trap reads it
-HOOK_WARNED=0      # warn once, not once per node
+DRAINING_NODE="" # set around each drain; the EXIT trap reads it
+HOOK_WARNED=0    # warn once, not once per node
 
 # ---- functions ----
 
 assert_cluster_reachable() {
   require docker kubectl
-  docker info >/dev/null 2>&1 || die "docker not responding (start Rancher/Docker Desktop)"
+  docker info > /dev/null 2>&1 || die "docker not responding (start Rancher/Docker Desktop)"
   [ -f "${CLUSTER_DIR}/talosconfig" ] || die "missing ${CLUSTER_DIR}/talosconfig, run step 03 (03c) first"
-  use_kubeconfig    # native kubectl drives the drain
+  use_kubeconfig # native kubectl drives the drain
   assert_api
   say "pulling ghcr.io/siderolabs/talosctl:${TALOSCTL_VERSION} (first run only)"
-  docker pull -q "ghcr.io/siderolabs/talosctl:${TALOSCTL_VERSION}" >/dev/null
-  talosctl -n "${CP_IPS[0]}" version >/dev/null 2>&1 \
+  docker pull -q "ghcr.io/siderolabs/talosctl:${TALOSCTL_VERSION}" > /dev/null
+  talosctl -n "${CP_IPS[0]}" version > /dev/null 2>&1 \
     || die "cluster API not reachable via ${CLUSTER_DIR}/talosconfig (is the cluster up?)"
 }
 
@@ -49,7 +49,7 @@ confirm_upgrade() {
   echo
   warn "this reboots EVERY node in turn (atomic A/B, a few min each). etcd quorum is held throughout."
   printf '>> proceed with the rolling upgrade? type yes: '
-  read -r answer </dev/tty 2>/dev/null || answer=""
+  read -r answer < /dev/tty 2> /dev/null || answer=""
   [ "$answer" = "yes" ] || die "aborted"
 }
 
@@ -75,12 +75,16 @@ wait_replication_healthy() {
   fi
   [ -x "$PRE_DRAIN_HEALTH_HOOK" ] || die "PRE_DRAIN_HEALTH_HOOK is not executable: ${PRE_DRAIN_HEALTH_HOOK}"
   printf '  waiting for replicated stores healthy + in sync (%s)' "$(basename "$PRE_DRAIN_HEALTH_HOOK")"
-  deadline=$(( $(date +%s) + REPLICATION_HEALTH_TIMEOUT ))
+  deadline=$(($(date +%s) + REPLICATION_HEALTH_TIMEOUT))
   while :; do
     NODE="$node" REPLICATION_HEALTH_TIMEOUT="$REPLICATION_HEALTH_TIMEOUT" \
-      "$PRE_DRAIN_HEALTH_HOOK" >/dev/null 2>&1 && { printf ' ok\n'; return 0; }
+      "$PRE_DRAIN_HEALTH_HOOK" > /dev/null 2>&1 && {
+      printf ' ok\n'
+      return 0
+    }
     [ "$(date +%s)" -ge "$deadline" ] && die "replicated stores not healthy after ${REPLICATION_HEALTH_TIMEOUT}s (run ${PRE_DRAIN_HEALTH_HOOK} to see why). Fix, then re-run (idempotent, skips done nodes)."
-    printf '.'; sleep 15
+    printf '.'
+    sleep 15
   done
 }
 
@@ -105,21 +109,21 @@ evacuate_node() {
 
 drain_node() {
   local node="$1"
-  kubectl cordon "$node" >/dev/null
+  kubectl cordon "$node" > /dev/null
   if ! kubectl drain "$node" --ignore-daemonsets --delete-emptydir-data \
-        --timeout="${GRACEFUL_DRAIN_TIMEOUT}s" >/dev/null 2>&1; then
+    --timeout="${GRACEFUL_DRAIN_TIMEOUT}s" > /dev/null 2>&1; then
     warn "graceful drain of ${node} timed out; force-deleting stragglers"
     # The selector is node-wide, so ONE wedged pod force-kills every other pod on the node too. Empty keeps
     # that; set FORCE_DELETE_SKIP to spare anything that will not come back from it.
     kubectl delete pod --all-namespaces --field-selector "spec.nodeName=${node}" \
       ${FORCE_DELETE_SKIP:+--selector "$FORCE_DELETE_SKIP"} \
-      --force --grace-period="${FORCE_GRACE}" >/dev/null 2>&1 || true
+      --force --grace-period="${FORCE_GRACE}" > /dev/null 2>&1 || true
   fi
 }
 
 uncordon_node() {
-  kubectl uncordon "$1" >/dev/null 2>&1 || true   # Talos uncordons on rejoin; make it explicit and idempotent
-  kubectl taint node "$1" node.kubernetes.io/out-of-service- >/dev/null 2>&1 || true
+  kubectl uncordon "$1" > /dev/null 2>&1 || true # Talos uncordons on rejoin; make it explicit and idempotent
+  kubectl taint node "$1" node.kubernetes.io/out-of-service- > /dev/null 2>&1 || true
 }
 
 # Health is asked of a CONTROL-PLANE node, never of the node just upgraded: Talos answers this check only
@@ -154,7 +158,7 @@ upgrade_host() {
   fi
 
   say "waiting for cluster health before the next node"
-  talosctl -n "${CP_IPS[0]}" health --wait-timeout "${HEALTH_TIMEOUT}s" >/dev/null 2>&1 \
+  talosctl -n "${CP_IPS[0]}" health --wait-timeout "${HEALTH_TIMEOUT}s" > /dev/null 2>&1 \
     || die "cluster not healthy after upgrading ${ip}; stopping. Investigate, then re-run to resume."
 
   uncordon_node "$node"

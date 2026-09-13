@@ -7,13 +7,13 @@ source "${SCRIPT_DIR}/common.sh"
 
 # ---- knobs ----
 WORKDIR="$(mktemp -d)/rpi-eeprom-build"
-BOOT_ORDER="0xf461"                  # SD -> NVMe -> USB -> retry
-SD_LABEL="RPIBOOT"                   # FAT32 volume name (<=11 chars, UPPERCASE)
+BOOT_ORDER="0xf461" # SD -> NVMe -> USB -> retry
+SD_LABEL="RPIBOOT"  # FAT32 volume name (<=11 chars, UPPERCASE)
 
 # ---- state ----
-PIEEPROM_SRC=""   # set by pick_bootloader_image
+PIEEPROM_SRC="" # set by pick_bootloader_image
 RECOVERY_SRC=""
-SD_DISK=""        # set by prompt_for_sd_card
+SD_DISK="" # set by prompt_for_sd_card
 
 # ---- functions ----
 
@@ -38,12 +38,14 @@ pick_bootloader_image() {
 write_eeprom_config() {
   python3 ./rpi-eeprom-config "${PIEEPROM_SRC}" > boot.conf
   grep -v -E '^(BOOT_ORDER|PCIE_PROBE)=' boot.conf > boot.conf.new || true
-cat >> boot.conf.new <<EOF
+  cat >> boot.conf.new << EOF
 BOOT_ORDER=${BOOT_ORDER}
 PCIE_PROBE=1
 EOF
   mv boot.conf.new boot.conf
-  echo "----- final EEPROM config -----"; cat boot.conf; echo "-------------------------------"
+  echo "----- final EEPROM config -----"
+  cat boot.conf
+  echo "-------------------------------"
 }
 
 # pieeprom.bin, not .upd: recovery.bin flashes and then stops without disabling the card, so one card does
@@ -53,20 +55,24 @@ build_card_payload() {
   shasum -a 256 pieeprom.bin | cut -d' ' -f1 > pieeprom.sig
   mkdir -p ../card
   cp "${RECOVERY_SRC}" pieeprom.bin pieeprom.sig ../card/
-  say "card payload ready:"; ls -l ../card
+  say "card payload ready:"
+  ls -l ../card
 }
 
 # The WHOLE-DISK id (/dev/disk4), not a partition (/dev/disk4s1).
 prompt_for_sd_card() {
   diskutil list
   read -r -p ">> enter SD card disk id (e.g. /dev/disk4): " SD_DISK
-  diskutil info "${SD_DISK}" >/dev/null 2>&1 || die "'${SD_DISK}' is not a disk"
+  diskutil info "${SD_DISK}" > /dev/null 2>&1 || die "'${SD_DISK}' is not a disk"
 }
 
 confirm_erase() {
   diskutil info "${SD_DISK}" | grep -E 'Device / Media Name|Disk Size|Removable|Protocol' || true
   confirm_word_always YES "ERASE ${SD_DISK} and write the EEPROM card?" \
-    || { echo "aborted."; exit 1; }
+    || {
+      echo "aborted."
+      exit 1
+    }
 }
 
 write_card() {

@@ -11,7 +11,7 @@ CLUSTER_KC="${CLUSTER_DIR}/kubeconfig"
 HOME_KC="${HOME}/.kube/config"
 
 # ---- state ----
-TARGET_CTX=""   # set by read_target_context
+TARGET_CTX="" # set by read_target_context
 
 # ---- functions ----
 
@@ -24,10 +24,10 @@ read_target_context() {
 # Entries are named after CLUSTER_NAME, so a second run replaces them rather than piling up.
 merge_into_home_kubeconfig() {
   local backup tmp
-  umask 077   # everything below writes a file holding cluster admin creds
+  umask 077 # everything below writes a file holding cluster admin creds
   mkdir -p "$(dirname "$HOME_KC")"
   if [ ! -f "$HOME_KC" ]; then
-    cp "$CLUSTER_KC" "$HOME_KC"     # no ~/.kube/config yet, so a plain copy IS the merge
+    cp "$CLUSTER_KC" "$HOME_KC" # no ~/.kube/config yet, so a plain copy IS the merge
     ok "created ${HOME_KC} from ${CLUSTER_KC}"
     return 0
   fi
@@ -47,7 +47,7 @@ merge_into_home_kubeconfig() {
 
 # Explicit, rather than relying on --flatten taking current-context from the first KUBECONFIG entry.
 select_context() {
-  kubectl config use-context "$TARGET_CTX" >/dev/null
+  kubectl config use-context "$TARGET_CTX" > /dev/null
   ok "active context: ${TARGET_CTX}"
   say "contexts now in ${HOME_KC}"
   kubectl config get-contexts

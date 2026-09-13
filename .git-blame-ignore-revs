@@ -1,0 +1,2 @@
+# git config blame.ignoreRevsFile .git-blame-ignore-revs
+e2b80d0bd08465b016bcfcb21a99d63de910bb4a  Reformat shell scripts with shfmt -i 2 -ci -bn -sr

@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 
 usage() {
-  cat <<EOF
+  cat << EOF
 03c_talos_cluster_config.sh [--reapply] [<host>]
   (none)      nodes must be in MAINTENANCE: apply insecurely, bootstrap etcd, write the kubeconfig.
               First bring-up, or a rebuild after DANGEROUS_reset_talos_cluster.sh.
@@ -23,18 +23,21 @@ EOF
 }
 
 # ---- knobs ----
-OUTDIR="${CLUSTER_DIR}"    # durable creds; the lib's talosctl() mounts it as /work, so /work == ${OUTDIR}
+OUTDIR="${CLUSTER_DIR}" # durable creds; the lib's talosctl() mounts it as /work, so /work == ${OUTDIR}
 # Throwaway render scratch in an OS temp dir, so nothing lingers next to the durable creds and there is
 # nothing to clean up. talosctl() mounts it at /scratch. Survives a mid-run failure for inspection.
 TALOS_SCRATCH="$(mktemp -d)"
 
-CLUSTER="$CLUSTER_NAME"; EPHEMERAL="$EPHEMERAL_SIZE"; VIP="$CLUSTER_VIP"; KVER="$KUBERNETES_VERSION"
+CLUSTER="$CLUSTER_NAME"
+EPHEMERAL="$EPHEMERAL_SIZE"
+VIP="$CLUSTER_VIP"
+KVER="$KUBERNETES_VERSION"
 
 # ---- state ----
-REAPPLY=false             # set by parse_args
+REAPPLY=false # set by parse_args
 JOIN_ONE=""
 TARGETS=()
-REGISTRIES_BLOCK=""       # set by build_registries_block
+REGISTRIES_BLOCK="" # set by build_registries_block
 
 # ---- functions ----
 
@@ -43,10 +46,19 @@ parse_args() {
   TARGETS=("${CP_HOSTS[@]}" "${WORKER_HOSTS[@]}")
   while [ $# -gt 0 ]; do
     case "$1" in
-      -h|--help) usage; exit 0 ;;
-      --reapply) REAPPLY=true; shift ;;
-      -*)        die "unknown flag: $1 (see --help)" ;;
-      *)         JOIN_ONE="$1"; shift ;;
+      -h | --help)
+        usage
+        exit 0
+        ;;
+      --reapply)
+        REAPPLY=true
+        shift
+        ;;
+      -*) die "unknown flag: $1 (see --help)" ;;
+      *)
+        JOIN_ONE="$1"
+        shift
+        ;;
     esac
   done
   if [ -n "$JOIN_ONE" ]; then
@@ -81,7 +93,8 @@ build_registries_block() {
     echo "  -> GITHUB_GHCR_PULL_TOKEN_SECRET empty in .env; skipping registry auth (fine if every image is PUBLIC)."
     return 0
   fi
-  REGISTRIES_BLOCK="$(cat <<EOF
+  REGISTRIES_BLOCK="$(
+    cat << EOF
   registries:
     config:
       ${GHCR_SERVER}:
@@ -89,7 +102,7 @@ build_registries_block() {
           username: ${GHCR_USER}
           password: ${GITHUB_GHCR_PULL_TOKEN_SECRET}
 EOF
-)"
+  )"
   echo "  -> ${GHCR_SERVER} auth (from .env GITHUB_GHCR_PULL_TOKEN_SECRET) baked into the machine config for all nodes."
 }
 
@@ -147,7 +160,7 @@ set_talosconfig_endpoints() {
 write_control_plane_patch() {
   local certsans
   certsans="$(printf '      - %s\n' "${VIP}" "${CP_IPS[@]}")"
-cat > "${TALOS_SCRATCH}/cp-patch.yaml" <<EOF
+  cat > "${TALOS_SCRATCH}/cp-patch.yaml" << EOF
 machine:
 ${REGISTRIES_BLOCK}
   kubelet:
@@ -217,7 +230,7 @@ EOF
 # keys: those are control-plane bootstrap settings a worker never reads.
 write_worker_patch() {
   [ "${#WORKER_HOSTS[@]}" -gt 0 ] || return 0
-cat > "${TALOS_SCRATCH}/worker-patch.yaml" <<EOF
+  cat > "${TALOS_SCRATCH}/worker-patch.yaml" << EOF
 machine:
 ${REGISTRIES_BLOCK}
   kubelet:
@@ -243,7 +256,7 @@ EOF
 # nothing to keep in sync. Matching on transport instead would miss a SATA node and pick the wrong drive on a
 # node with two NVMes.
 write_volume_config() {
-cat > "${TALOS_SCRATCH}/volumes.yaml" <<EOF
+  cat > "${TALOS_SCRATCH}/volumes.yaml" << EOF
 ---
 apiVersion: v1alpha1
 kind: VolumeConfig
@@ -281,7 +294,10 @@ wait_for_maintenance() {
     ip="${NODE_IP[$host]}"
     printf '   %-12s %-16s ' "$host" "$ip"
     wait_talos_api "$ip" 300 insecure \
-      || { echo "TIMEOUT"; die "${ip} not in maintenance after 300s. If it is already RUNNING, you want --reapply."; }
+      || {
+        echo "TIMEOUT"
+        die "${ip} not in maintenance after 300s. If it is already RUNNING, you want --reapply."
+      }
     echo "ready"
   done
 }
@@ -294,7 +310,7 @@ assert_nodes_running() {
   for host in "${TARGETS[@]}"; do
     ip="${NODE_IP[$host]}"
     printf '   %-12s %-16s ' "$host" "$ip"
-    talosctl -e "$ip" -n "$ip" version >/dev/null 2>&1 \
+    talosctl -e "$ip" -n "$ip" version > /dev/null 2>&1 \
       || die "${ip} does not answer the secure API, so it is not a running node of this cluster. Drop --reapply to initialise it from maintenance."
     echo "running"
   done
@@ -307,11 +323,12 @@ assert_nodes_running() {
 report_hardware() {
   local host ip disks disk
   for host in "${TARGETS[@]}"; do
-    ip="${NODE_IP[$host]}"; disk="${NODE_INSTALL_DISK[$host]}"
+    ip="${NODE_IP[$host]}"
+    disk="${NODE_INSTALL_DISK[$host]}"
     say "${host} (${ip}, ${NODE_TYPE[$host]}) hardware"
-    talosctl -e "$ip" -n "$ip" get cpus  --insecure 2>/dev/null | tail -n +2 | sed 's/^/   cpu   /' || true
-    talosctl -e "$ip" -n "$ip" get links --insecure 2>/dev/null | tail -n +2 | sed 's/^/   link  /' || true
-    disks="$(talosctl -e "$ip" -n "$ip" get disks --insecure 2>/dev/null || true)"
+    talosctl -e "$ip" -n "$ip" get cpus --insecure 2> /dev/null | tail -n +2 | sed 's/^/   cpu   /' || true
+    talosctl -e "$ip" -n "$ip" get links --insecure 2> /dev/null | tail -n +2 | sed 's/^/   link  /' || true
+    disks="$(talosctl -e "$ip" -n "$ip" get disks --insecure 2> /dev/null || true)"
     printf '%s\n' "$disks" | tail -n +2 | sed 's/^/   disk  /'
     grep -qE "[[:space:]/]${disk##*/}([[:space:]]|\$)" <<< "$disks" \
       || die "${host} has no ${disk}, so installing to it would write a device that is not there. Set its installDisk in inventory.yaml to one of the disks listed above."
@@ -328,14 +345,21 @@ report_hardware() {
 # carries NO endpoints. Without it the apply dies with "failed to determine endpoints". --insecure never
 # needed it, since that dials -n directly.
 apply_to() {
-  local host="$1"; shift
+  local host="$1"
+  shift
   local ip="${NODE_IP[$host]}" base rpatch npatch
   case "${NODE_ROLE[$host]}" in
-    controlplane) base="/scratch/cp.yaml";     rpatch="/scratch/cp-patch.yaml" ;;
-    worker)       base="/scratch/worker.yaml"; rpatch="/scratch/worker-patch.yaml" ;;
+    controlplane)
+      base="/scratch/cp.yaml"
+      rpatch="/scratch/cp-patch.yaml"
+      ;;
+    worker)
+      base="/scratch/worker.yaml"
+      rpatch="/scratch/worker-patch.yaml"
+      ;;
   esac
   npatch="$(printf '{"machine":{"install":{"image":"%s","disk":"%s"},"nodeLabels":{"node.kubernetes.io/instance-type":"%s"}}}' \
-            "$(installer_ref_for "$host")" "${NODE_INSTALL_DISK[$host]}" "${NODE_TYPE[$host]}")"
+    "$(installer_ref_for "$host")" "${NODE_INSTALL_DISK[$host]}" "${NODE_TYPE[$host]}")"
   talosctl apply-config -e "${ip}" -n "${ip}" -f "$base" \
     -p @"$rpatch" \
     -p "$npatch" \
@@ -356,7 +380,7 @@ confirm_reapply() {
   # size. So an EPHEMERAL_SIZE edit applies to a NEW node and silently does nothing to these.
   warn "volume sizes are fixed at provision time; changing them here reaches new nodes only, not these"
   printf '>> apply to %d running node(s)? some changes reboot. type yes: ' "${#TARGETS[@]}"
-  read -r answer </dev/tty 2>/dev/null || answer=""
+  read -r answer < /dev/tty 2> /dev/null || answer=""
   [ "$answer" = "yes" ] || die "aborted, nothing applied"
 }
 
@@ -364,8 +388,10 @@ apply_configs() {
   local host
   for host in "${TARGETS[@]}"; do
     say "applying ${NODE_ROLE[$host]} config to ${host} (${NODE_IP[$host]})"
-    if [ "$REAPPLY" = true ]; then apply_to "$host" --mode auto
-    else                           apply_to "$host" --insecure
+    if [ "$REAPPLY" = true ]; then
+      apply_to "$host" --mode auto
+    else
+      apply_to "$host" --insecure
     fi
   done
 }
@@ -377,19 +403,22 @@ apply_configs() {
 wait_for_configured() {
   local host ip
   say "waiting for nodes to settle into their configured state (up to 5 min each)..."
-  sleep 10   # let any reboot actually begin (avoids a false 'ready' before it goes down)
+  sleep 10 # let any reboot actually begin (avoids a false 'ready' before it goes down)
   for host in "${TARGETS[@]}"; do
     ip="${NODE_IP[$host]}"
     printf '   %-12s %-16s ' "$host" "$ip"
     wait_talos_api "$ip" 300 secure \
-      || { echo "TIMEOUT"; die "${ip} never came back, check its console/power"; }
+      || {
+        echo "TIMEOUT"
+        die "${ip} never came back, check its console/power"
+      }
     echo "ready"
   done
   sleep 10
 }
 
 bootstrap_etcd_and_fetch_kubeconfig() {
-  talosctl bootstrap -n "${CP_IPS[0]}"   # ONCE, on the first control-plane node only
+  talosctl bootstrap -n "${CP_IPS[0]}" # ONCE, on the first control-plane node only
   sleep 10
   say "waiting for cluster health (a few minutes)..."
   talosctl health --wait-timeout 10m || warn "health timed out, verify with kubectl below"
@@ -434,7 +463,7 @@ if [ "$REAPPLY" = true ]; then
   confirm_reapply
 else
   wait_for_maintenance
-  report_hardware    # reads over the insecure API, which a running node refuses
+  report_hardware # reads over the insecure API, which a running node refuses
 fi
 
 apply_configs

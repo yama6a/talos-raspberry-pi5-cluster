@@ -6,17 +6,18 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
-cd "$REPO_ROOT" || exit 1           # git ops and relative hints below; set -e is off, so guard the cd
+cd "$REPO_ROOT" || exit 1 # git ops and relative hints below; set -e is off, so guard the cd
 
 # ---- knobs ----
-STEP=0; STEP_TOTAL=5                # common.sh step/run_step; bump TOTAL if you add or remove a step
-STEP_DIR="$SCRIPT_DIR"              # every step script is a sibling of this orchestrator
+STEP=0
+STEP_TOTAL=5           # common.sh step/run_step; bump TOTAL if you add or remove a step
+STEP_DIR="$SCRIPT_DIR" # every step script is a sibling of this orchestrator
 KUBECONFIG_FILE="${CLUSTER_DIR}/kubeconfig"
-MAINT_TIMEOUT=30                    # secs/node to confirm the maintenance API before giving up
-IPS=("${ALL_IPS[@]}")               # workers included: 03c configures them in the same pass
+MAINT_TIMEOUT=30      # secs/node to confirm the maintenance API before giving up
+IPS=("${ALL_IPS[@]}") # workers included: 03c configures them in the same pass
 
 # ---- state ----
-CNI_RESULT=""    # set by describe_cni_outcome
+CNI_RESULT="" # set by describe_cni_outcome
 CNI_STATE=""
 NODES_HINT=""
 
@@ -24,7 +25,7 @@ NODES_HINT=""
 
 check_prerequisites() {
   require docker yq kubectl
-  docker info >/dev/null 2>&1 || die "docker not responding (start Rancher/Docker Desktop)"
+  docker info > /dev/null 2>&1 || die "docker not responding (start Rancher/Docker Desktop)"
   [ -f "${STEP_DIR}/03c_talos_cluster_config.sh" ] || die "missing 03c, run from the repo root"
 }
 
@@ -44,7 +45,7 @@ and service networking and nothing else: no LoadBalancer, no L2 announcements, n
 # Archiving secrets.yaml makes 03c mint a NEW Talos CA, so the archived talosconfig and kubeconfig stop
 # working. Intended for a genuine from-scratch init.
 confirm_bootstrap() {
-cat <<EOF
+  cat << EOF
 
 This will BOOTSTRAP a FIRST-TIME Talos cluster on freshly-flashed nodes:
   nodes   : ${IPS[*]}
@@ -56,9 +57,12 @@ This will BOOTSTRAP a FIRST-TIME Talos cluster on freshly-flashed nodes:
 Requires nodes in MAINTENANCE mode (03a done; 03b boot-verify is run for you below). To wipe a RUNNING
 cluster first, abort and use DANGEROUS_reset_talos_cluster.sh.
 EOF
-  confirm_word_always BOOTSTRAP || { echo "aborted (phew!)."; exit 0; }
+  confirm_word_always BOOTSTRAP || {
+    echo "aborted (phew!)."
+    exit 0
+  }
   say "pulling ghcr.io/siderolabs/talosctl:${TALOSCTL_VERSION} (first run only)"
-  docker pull -q "ghcr.io/siderolabs/talosctl:${TALOSCTL_VERSION}" >/dev/null 2>&1 || true
+  docker pull -q "ghcr.io/siderolabs/talosctl:${TALOSCTL_VERSION}" > /dev/null 2>&1 || true
 }
 
 # A maintenance node answers the INSECURE API; a CONFIGURED one does NOT. So requiring insecure `version` to
@@ -69,8 +73,10 @@ assert_nodes_in_maintenance() {
   step "checking every node is in MAINTENANCE mode (fresh-init preflight)"
   for ip in "${IPS[@]}"; do
     printf '   %-15s ' "$ip"
-    wait_talos_api "$ip" "$MAINT_TIMEOUT" insecure 3 || { echo "NOT IN MAINTENANCE"; \
-      die "${ip} is not answering the maintenance API within ${MAINT_TIMEOUT}s. Bootstrap needs freshly-flashed nodes in maintenance mode (03a/03b). If this is a RUNNING cluster, use DANGEROUS_reset_talos_cluster.sh to wipe first."; }
+    wait_talos_api "$ip" "$MAINT_TIMEOUT" insecure 3 || {
+      echo "NOT IN MAINTENANCE"
+      die "${ip} is not answering the maintenance API within ${MAINT_TIMEOUT}s. Bootstrap needs freshly-flashed nodes in maintenance mode (03a/03b). If this is a RUNNING cluster, use DANGEROUS_reset_talos_cluster.sh to wipe first."
+    }
     echo "maintenance"
   done
   ok "all nodes in maintenance"
@@ -91,18 +97,21 @@ archive_existing_creds() {
   step "archiving existing creds -> ${backup_subdir}"
   mkdir -p "$backup_subdir"
   for path in "${CLUSTER_DIR}"/* "${CLUSTER_DIR}"/.[!.]*; do
-    [ -e "$path" ] || continue                       # glob matched nothing (nullglob off)
+    [ -e "$path" ] || continue # glob matched nothing (nullglob off)
     [ -d "$path" ] && continue
     f="$(basename "$path")"
-    [ "$f" = ".DS_Store" ] && continue                # macOS noise, not a cred
-    mv "$path" "${backup_subdir}/" && moved=$((moved+1)) || die "could not archive ${f}"
+    [ "$f" = ".DS_Store" ] && continue # macOS noise, not a cred
+    mv "$path" "${backup_subdir}/" && moved=$((moved + 1)) || die "could not archive ${f}"
   done
-  if [ "$moved" -gt 0 ]; then ok "archived ${moved} file(s)"; else rmdir "$backup_subdir" 2>/dev/null; ok "nothing to archive (already a clean start)"; fi
+  if [ "$moved" -gt 0 ]; then ok "archived ${moved} file(s)"; else
+    rmdir "$backup_subdir" 2> /dev/null
+    ok "nothing to archive (already a clean start)"
+  fi
 }
 
 print_handoff() {
   if [ "$FAIL" -eq 0 ]; then
-cat <<HANDOFF
+    cat << HANDOFF
 
 The cluster is configured and etcd is bootstrapped. ${CNI_STATE}
 

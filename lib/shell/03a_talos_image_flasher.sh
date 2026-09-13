@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 
 usage() {
-  cat <<EOF
+  cat << EOF
 03a_talos_image_flasher.sh [<host>]        (or: make flash-talos-nvme NODE=<host>)
   <host>   whose IMAGE to write; omit it to pick from the inventory interactively
 
@@ -18,14 +18,14 @@ EOF
 }
 
 # ---- state ----
-NODE=""          # set by resolve_node
+NODE="" # set by resolve_node
 IMAGE_SOURCE=""
 IMAGE_FILE=""
-SRC=""           # set by resolve_image_url
+SRC="" # set by resolve_image_url
 DIR=""
 RAW_XZ=""
-RAW=""           # set by decompress_image
-DISK=""          # set by prompt_for_nvme
+RAW=""  # set by decompress_image
+DISK="" # set by prompt_for_nvme
 
 # ---- functions ----
 
@@ -38,19 +38,20 @@ choose_node_interactively() {
   for i in "${!ALL_HOSTS[@]}"; do
     h="${ALL_HOSTS[$i]}"
     printf '  %2d) %-14s %-16s %-12s %s\n' \
-      "$((i+1))" "$h" "${NODE_TYPE[$h]}" "${NODE_ROLE[$h]}" "${NODE_IMAGE_FILE[$h]}"
+      "$((i + 1))" "$h" "${NODE_TYPE[$h]}" "${NODE_ROLE[$h]}" "${NODE_IMAGE_FILE[$h]}"
   done
   echo
   while :; do
     read -r -p ">> number [1-${#ALL_HOSTS[@]}]: " pick \
       || die "no input to read (not a terminal?); name the node instead: make flash-talos-nvme NODE=<hostname>"
     case "$pick" in
-      ''|*[!0-9]*) echo "   '${pick}' is not a number." ;;
+      '' | *[!0-9]*) echo "   '${pick}' is not a number." ;;
       *) if [ "$pick" -ge 1 ] && [ "$pick" -le "${#ALL_HOSTS[@]}" ]; then
-           NODE="${ALL_HOSTS[$((pick-1))]}"; return 0
-         else
-           echo "   ${pick} is out of range."
-         fi ;;
+        NODE="${ALL_HOSTS[$((pick - 1))]}"
+        return 0
+      else
+        echo "   ${pick} is out of range."
+      fi ;;
     esac
   done
 }
@@ -125,17 +126,20 @@ prompt_for_nvme() {
   diskutil list
   read -r -p ">> enter NVMe disk id (e.g. /dev/disk6): " DISK \
     || die "no input to read (not a terminal?); this step needs a human to identify the drive"
-  diskutil info "${DISK}" >/dev/null 2>&1 || die "'${DISK}' is not a disk"
+  diskutil info "${DISK}" > /dev/null 2>&1 || die "'${DISK}' is not a disk"
 }
 
 confirm_erase() {
   diskutil info "${DISK}" | grep -E 'Device / Media Name|Disk Size|Protocol|Removable' || true
   confirm_word_always YES "ERASE ${DISK} and write the ${NODE_TYPE[$NODE]} Talos image (${IMAGE_FILE})?" \
-    || { echo "aborted."; exit 1; }
+    || {
+      echo "aborted."
+      exit 1
+    }
 }
 
 write_drive() {
-  local rdisk="/dev/r${DISK##*/}"   # the raw device is much faster on macOS
+  local rdisk="/dev/r${DISK##*/}" # the raw device is much faster on macOS
   diskutil unmountDisk "${DISK}"
   say "writing to ${rdisk} ... (press Ctrl-T for progress)"
   sudo dd if="${RAW}" of="${rdisk}" bs=4M
@@ -151,7 +155,11 @@ print_next_steps() {
 
 # ---- main ----
 
-case "${1:-}" in -h|--help) usage; exit 0 ;; esac
+case "${1:-}" in -h | --help)
+  usage
+  exit 0
+  ;;
+esac
 
 require curl xz
 resolve_node "$@"

@@ -13,11 +13,11 @@ IPS=("${CP_IPS[@]}")
 
 assert_cluster_reachable() {
   require docker
-  docker info >/dev/null 2>&1 || die "docker not responding (start Rancher/Docker Desktop)"
+  docker info > /dev/null 2>&1 || die "docker not responding (start Rancher/Docker Desktop)"
   [ -f "${CLUSTER_DIR}/talosconfig" ] || die "missing ${CLUSTER_DIR}/talosconfig, run step 03 (03c) first"
   say "pulling ghcr.io/siderolabs/talosctl:${TALOSCTL_VERSION} (first run only)"
-  docker pull -q "ghcr.io/siderolabs/talosctl:${TALOSCTL_VERSION}" >/dev/null
-  talosctl -n "${IPS[0]}" version >/dev/null 2>&1 \
+  docker pull -q "ghcr.io/siderolabs/talosctl:${TALOSCTL_VERSION}" > /dev/null
+  talosctl -n "${IPS[0]}" version > /dev/null 2>&1 \
     || die "cluster API not reachable via ${CLUSTER_DIR}/talosconfig (is the cluster up?)"
 }
 
@@ -31,7 +31,7 @@ confirm_upgrade() {
   echo
   warn "this rolls the live control plane (apiserver/controller-manager/scheduler + kubelet). No node reboots."
   printf '>> proceed with the k8s upgrade to %s? type yes: ' "${KUBERNETES_VERSION}"
-  read -r answer </dev/tty 2>/dev/null || answer=""
+  read -r answer < /dev/tty 2> /dev/null || answer=""
   [ "$answer" = "yes" ] || die "aborted"
 }
 

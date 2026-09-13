@@ -4,9 +4,9 @@ Renovate opens PRs to bump every pinned dependency in the repo.
 
 - Config: [`/renovate.json5`](../renovate.json5)
 - Runner: [`.github/workflows/renovate.yaml`](../.github/workflows/renovate.yaml)
-- Gate: [`.github/workflows/ci.yaml`](../.github/workflows/ci.yaml) validates every PR (shellcheck, yamllint,
-  actionlint, kubeconform, renovate-config-validator) and the automerge waits on it. See "How the automerge
-  works".
+- Gate: [`.github/workflows/ci.yaml`](../.github/workflows/ci.yaml) validates every PR (shellcheck, shfmt,
+  yamllint, actionlint, kubeconform, renovate-config-validator) and the automerge waits on it. See "How the
+  automerge works".
 
 ## Why Renovate, not Dependabot
 
