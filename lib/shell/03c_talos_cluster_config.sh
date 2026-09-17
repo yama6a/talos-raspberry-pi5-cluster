@@ -172,6 +172,10 @@ ${REGISTRIES_BLOCK}
         type: bind
         source: /var/mnt/storage
         options: [bind, rshared, rw]
+    # The default image GC only starts at 85% of EPHEMERAL, so every deploy's old tag stays until then. Age-based
+    # GC prunes an image unused for a week regardless of fullness. Age is tracked from kubelet start, not pull.
+    extraConfig:
+      imageMaximumGCAge: 168h
   features:
     kubePrism:
       enabled: true
@@ -225,7 +229,7 @@ ${certsans}
 EOF
 }
 
-# The same kubelet mounts and KubePrism, and nothing else. A worker carries no VIP (so no interfaces block
+# The same kubelet mounts, image GC age and KubePrism, and nothing else. A worker carries no VIP (so no interfaces block
 # either, which keeps a NIC name we cannot predict out of the config), no certSANs, no etcd and no CNI/proxy
 # keys: those are control-plane bootstrap settings a worker never reads.
 write_worker_patch() {
@@ -241,6 +245,8 @@ ${REGISTRIES_BLOCK}
         type: bind
         source: /var/mnt/storage
         options: [bind, rshared, rw]
+    extraConfig:
+      imageMaximumGCAge: 168h
   features:
     kubePrism:
       enabled: true

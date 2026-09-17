@@ -104,7 +104,7 @@ documents, the `HostnameConfig` apply and the reboot wait are the bulk of 03c an
 | `apiServer.certSANs` | the VIP plus every control-plane IP | n/a |
 | `etcd.extraArgs`, `allowSchedulingOnControlPlanes` | yes | n/a |
 | `cluster.network.cni`, `cluster.proxy` | yes | n/a, a worker reads neither |
-| kubelet `extraMounts`, KubePrism, volumes | identical | identical |
+| kubelet `extraMounts`, `imageMaximumGCAge`, KubePrism, volumes | identical | identical |
 
 Omitting the interfaces block is what keeps a NIC name we cannot predict out of the config. Talos DHCPs every
 link by default and a worker carries no VIP, so nothing needs to name it. Interface naming on x86 is

@@ -294,6 +294,11 @@ so I picked `192.168.100.1` for the VIP (inside the subnet, outside the DHCP ran
    path also gets a `kubelet.extraMounts` bind, `rshared`, so the containerized kubelet can see it and so a CSI
    driver's per-volume sub-mounts propagate back to the host. It sits empty until a storage layer is installed.
    Talos provisions a volume ONCE, so renaming it later orphans the partition rather than renaming it.
+   The kubelet also gets `imageMaximumGCAge: 168h`: by default it only prunes unused images once EPHEMERAL hits
+   85%, so on a node that takes a few deploys a day the old tags pile up to that line (each Next.js build is a
+   fresh ~700 MiB layer), then GC and the disk alert fire together. With an age cap an image unused for a week
+   goes regardless of fullness. The age counts from kubelet start, not from the pull, so the first sweep after
+   a config change or reboot is a week out.
 5. `apply-config` to each node, with a per-NODE patch on top of the per-ROLE one: `machine.install.image` from
    `installer_ref_for` (so each hardware type gets the installer it is built from) and the node label
    `node.kubernetes.io/instance-type=<type>` from its inventory `type`, which is what the `nic-keeper` DaemonSet
