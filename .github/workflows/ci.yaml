@@ -16,14 +16,14 @@ permissions:
 jobs:
   shell:
     name: shell
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: yama6a/gha/.github/actions/shell-checks@v2
 
   yaml:
     name: yaml
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: yama6a/gha/.github/actions/yaml-checks@v2
@@ -37,7 +37,7 @@ jobs:
 
   renovate-config:
     name: renovate-config
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # A broken config silently halts ALL dependency updates.
