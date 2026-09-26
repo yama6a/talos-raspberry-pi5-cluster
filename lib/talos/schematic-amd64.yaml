@@ -1,12 +1,11 @@
-# The image recipe for x86_64 nodes, POSTed to factory.talos.dev to get a schematic id. That id addresses both
-# the raw image 03a flashes and the installer 03e upgrades to, so both come from this one file.
-# Names only, no versions: the factory resolves each to the build matching TALOS_VERSION.
+# The x86_64 image recipe. factory.talos.dev turns it into one id for both the raw image and the installer.
+# Names only: the factory resolves each extension for TALOS_VERSION.
 customization:
   extraKernelArgs:
-    - talos.dashboard.disabled=1  # machined access-logs every poll feeding the dashboard, swamping the log export
+    - talos.dashboard.disabled=1  # machined logs every dashboard poll, which floods the log export
   systemExtensions:
     officialExtensions:
       - siderolabs/intel-ucode        # CPU errata + speculative-execution mitigations; Talos ships no microcode itself
-      - siderolabs/i915               # i915.ko + GPU firmware; without it the iGPU has no driver and no /dev/dri
+      - siderolabs/i915               # iGPU driver and firmware. Without it there is no /dev/dri
       - siderolabs/iscsi-tools        # iSCSI-based CSI drivers need iscsid/iscsiadm in userspace
       - siderolabs/util-linux-tools   # fstrim

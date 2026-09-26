@@ -1,31 +1,25 @@
 #!/usr/bin/env bash
-# Rolling-restarts the stateless Deployments so the scheduler re-spreads them after 03e's node-by-node drain.
-# A nudge, not guaranteed balance: the scheduler scores each pod alone. Not needed after 03f, which moves no pods.
+# Rolling-restarts the stateless Deployments, so the scheduler spreads them again after 03e's drains.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 
 # ---- knobs ----
-# Which namespaces must not be restarted depends on what the cluster runs, not on the hardware, so the list
-# comes from .env. Typically the CSI driver's namespace (its sidecars may be mid-volume-op) and the ingress
-# data plane.
 SKIP_NAMESPACES="$REBALANCE_SKIP_NAMESPACES"
-# A PVC alone does not make a Deployment unmovable: with `Recreate` the old pod releases the volume before the
-# new one wants it. Opting a namespace in here says its volumes can follow the pod. `RollingUpdate` is still
-# skipped even here, see select_deployments.
+# With `Recreate` the old pod releases its volume before the new one needs it, so these volumes can move.
 PVC_NAMESPACES="$REBALANCE_PVC_NAMESPACES"
 ROLLOUT_TIMEOUT=300 # secs per Deployment
-PARALLEL=3          # Deployments restarted at once; each surges an extra pod and the Pi 5s are RAM-tight
+PARALLEL=3          # Deployments restarted at once. Each surges an extra pod, and the Pi 5s run short of RAM
 
 # ---- state ----
-SELECTION="" # set by select_deployments: "DO|SKIP<TAB>reason<TAB>ns<TAB>name" per line
+SELECTION="" # "DO|SKIP<TAB>reason<TAB>ns<TAB>name" per line
 BATCH_PIDS=()
 BATCH_NAMES=()
 
 # ---- functions ----
 
-# Restarting onto a shrunken cluster would just pack the survivors.
+# Restarting onto fewer nodes would only pack the survivors.
 assert_all_nodes_schedulable() {
   local nodes_json not_ok node_count
   say "checking every node is Ready and schedulable"
@@ -39,10 +33,10 @@ for n in json.load(sys.stdin)["items"]:
     elif ready != "True":              print(f"{name} (Ready={ready})")
 ')"
   [ -z "$not_ok" ] || die "not rebalancing, these nodes cannot take pods: ${not_ok//$'\n'/, }. Wait for them to
-come back (or uncordon), then re-run: make rebalance-workloads"
+come back, or uncordon them, then re-run: make rebalance-workloads"
   node_count="$(printf '%s' "$nodes_json" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["items"]))')"
   [ "$node_count" -eq "${#ALL_HOSTS[@]}" ] \
-    || die "cluster has ${node_count} nodes, inventory.yaml expects ${#ALL_HOSTS[@]}; rebalancing now would skew the spread"
+    || die "the cluster has ${node_count} nodes and inventory.yaml expects ${#ALL_HOSTS[@]}. A rebalance now would skew the spread"
   ok "all ${node_count} nodes Ready and schedulable"
 }
 
@@ -51,7 +45,7 @@ pods_per_node() {
     -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' | sort | uniq -c | sed 's/^/   /'
 }
 
-# Statelessness is tested by looking for a PVC, not by name: operator-generated names (vmsingle-<cr>) rot.
+# Tests for a PVC, not a name, because operator-generated names change.
 select_deployments() {
   SELECTION="$(kubectl get deploy -A -o json | SKIP_NS="$SKIP_NAMESPACES" PVC_NS="$PVC_NAMESPACES" python3 -c '
 import json,os,sys
@@ -69,12 +63,12 @@ for d in json.load(sys.stdin)["items"]:
     else:                            verdict = "DO\t"
     print(f"{verdict}\t{ns}\t{name}")
 ')" || die "could not list deployments"
-  printf '%s\n' "$SELECTION" | grep -q . || die "no deployments found, is this the right cluster?"
+  printf '%s\n' "$SELECTION" | grep -q . || die "no deployments found. Is this the right cluster?"
   say "skipping"
   printf '%s\n' "$SELECTION" | awk -F'\t' '$1=="SKIP"{printf "   %s/%s  (%s)\n", $3, $4, $2}'
 }
 
-# Runs in a background job, so it reports through its exit code: ok/bad in a subshell would not reach summary.
+# Runs in the background, so it reports through its exit code. ok and bad in a subshell miss the summary.
 restart_one() {
   kubectl -n "$1" rollout restart "deployment/$2" > /dev/null 2>&1 || return 1
   kubectl -n "$1" rollout status "deployment/$2" --timeout="${ROLLOUT_TIMEOUT}s" > /dev/null 2>&1 || return 2
@@ -88,7 +82,7 @@ wait_batch() {
     case $? in
       0) ok "${ns}/${name}" ;;
       1) bad "${ns}/${name} (restart not accepted)" ;;
-      *) bad "${ns}/${name} (not Available within ${ROLLOUT_TIMEOUT}s, check: kubectl -n ${ns} describe deploy ${name})" ;;
+      *) bad "${ns}/${name} (not Available within ${ROLLOUT_TIMEOUT}s. Check: kubectl -n ${ns} describe deploy ${name})" ;;
     esac
   done
   BATCH_PIDS=()

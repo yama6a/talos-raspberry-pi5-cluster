@@ -1,4 +1,4 @@
-disable=SC2034   # lib/shell/common.sh constants are read by the scripts that source it
-disable=SC1091   # common.sh is sourced via a computed path; shellcheck cannot follow it and -x does not help
-disable=SC2015   # `cond && ok || err` is the deliberate reporting idiom, not an if-then-else mistake
-disable=SC2016   # single-quoted bodies are passed to remote shells and must not expand locally
+disable=SC2034   # "assigned but never used": common.sh constants are read by the scripts that source it
+disable=SC1091   # "cannot follow sourced file": common.sh has a computed path, and -x does not help
+disable=SC2015   # "A && B || C is not if-then-else": `check && ok || bad` is how the scripts report
+disable=SC2016   # "expressions don't expand in single quotes": bodies passed to remote shells must not expand here
