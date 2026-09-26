@@ -202,6 +202,22 @@ cluster:
       name: ${CNI_NAME}
   proxy:
     disabled: ${PROXY_DISABLED}
+  # Memory, not CPU, is what runs out on 8 GB Pis next to a 16 GB worker. Weighting free memory 3:1 makes the
+  # scheduler prefer the node with room for it instead of a near-tie decided by CPU requests.
+  scheduler:
+    config:
+      apiVersion: kubescheduler.config.k8s.io/v1
+      kind: KubeSchedulerConfiguration
+      profiles:
+        - schedulerName: default-scheduler
+          pluginConfig:
+            - name: NodeResourcesFit
+              args:
+                scoringStrategy:
+                  type: LeastAllocated
+                  resources:
+                    - {name: cpu, weight: 1}
+                    - {name: memory, weight: 3}
   apiServer:
     # Talos audit-logs at Metadata for EVERYTHING by default, which is ~1GB a day per node, mostly leader-election
     # leases and controller reads. Narrowed to writes of real objects, which is ~1.5% of that and is the part
