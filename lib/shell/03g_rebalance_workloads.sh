@@ -15,10 +15,13 @@ SKIP_NAMESPACES="$REBALANCE_SKIP_NAMESPACES"
 # new one wants it. Opting a namespace in here says its volumes can follow the pod. `RollingUpdate` is still
 # skipped even here, see select_deployments.
 PVC_NAMESPACES="$REBALANCE_PVC_NAMESPACES"
-ROLLOUT_TIMEOUT=300 # secs per Deployment; restarts are serial, maxSurge doubles pods and 3 Pi 5s are RAM-tight
+ROLLOUT_TIMEOUT=300 # secs per Deployment
+PARALLEL=3          # Deployments restarted at once; each surges an extra pod and the Pi 5s are RAM-tight
 
 # ---- state ----
 SELECTION="" # set by select_deployments: "DO|SKIP<TAB>reason<TAB>ns<TAB>name" per line
+BATCH_PIDS=()
+BATCH_NAMES=()
 
 # ---- functions ----
 
@@ -71,22 +74,39 @@ for d in json.load(sys.stdin)["items"]:
   printf '%s\n' "$SELECTION" | awk -F'\t' '$1=="SKIP"{printf "   %s/%s  (%s)\n", $3, $4, $2}'
 }
 
+# Runs in a background job, so it reports through its exit code: ok/bad in a subshell would not reach summary.
+restart_one() {
+  kubectl -n "$1" rollout restart "deployment/$2" > /dev/null 2>&1 || return 1
+  kubectl -n "$1" rollout status "deployment/$2" --timeout="${ROLLOUT_TIMEOUT}s" > /dev/null 2>&1 || return 2
+}
+
+wait_batch() {
+  local i ns name
+  for i in "${!BATCH_PIDS[@]}"; do
+    IFS=$'\t' read -r ns name <<< "${BATCH_NAMES[$i]}"
+    wait "${BATCH_PIDS[$i]}"
+    case $? in
+      0) ok "${ns}/${name}" ;;
+      1) bad "${ns}/${name} (restart not accepted)" ;;
+      *) bad "${ns}/${name} (not Available within ${ROLLOUT_TIMEOUT}s, check: kubectl -n ${ns} describe deploy ${name})" ;;
+    esac
+  done
+  BATCH_PIDS=()
+  BATCH_NAMES=()
+}
+
 restart_deployments() {
   local targets ns name
   targets="$(printf '%s\n' "$SELECTION" | awk -F'\t' '$1=="DO"{print $3"\t"$4}')"
-  say "restarting $(printf '%s\n' "$targets" | grep -c .) deployments, one at a time"
+  say "restarting $(printf '%s\n' "$targets" | grep -c .) deployments, ${PARALLEL} at a time"
   while IFS=$'\t' read -r ns name; do
     [ -n "$ns" ] || continue
-    if ! kubectl -n "$ns" rollout restart "deployment/${name}" > /dev/null 2>&1; then
-      bad "${ns}/${name} (restart not accepted)"
-      continue
-    fi
-    if kubectl -n "$ns" rollout status "deployment/${name}" --timeout="${ROLLOUT_TIMEOUT}s" > /dev/null 2>&1; then
-      ok "${ns}/${name}"
-    else
-      bad "${ns}/${name} (not Available within ${ROLLOUT_TIMEOUT}s, check: kubectl -n ${ns} describe deploy ${name})"
-    fi
+    restart_one "$ns" "$name" &
+    BATCH_PIDS+=("$!")
+    BATCH_NAMES+=("${ns}"$'\t'"${name}")
+    [ "${#BATCH_PIDS[@]}" -lt "$PARALLEL" ] || wait_batch
   done <<< "$targets"
+  wait_batch
 }
 
 # ---- main ----
