@@ -1,19 +1,17 @@
 #!/usr/bin/env bash
-# Verifies every node after flashing (03a) and booting from its NVMe, while still in MAINTENANCE mode.
-# The last per-node gate before cluster bring-up (03c).
+# Checks every node after 03a, booted from its NVMe and still in maintenance mode. The last gate before 03c.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 
 # ---- knobs ----
-EXPECT_TALOS="$TALOS_VERSION"           # our build's Talos version (a local "-dirty" build matches too)
-EXPECT_CMDLINE="console=ttyAMA0,115200" # rpi5 overlay signature in the kernel cmdline
+EXPECT_TALOS="$TALOS_VERSION"           # a local "-dirty" build matches too
+EXPECT_CMDLINE="console=ttyAMA0,115200" # the rpi5 overlay's mark in the kernel cmdline
 
 # ---- functions ----
 
-# Insecure and with no talosconfig, because these nodes are in maintenance and are not a cluster yet. Distinct
-# from the lib's talosctl(), which mounts the cluster talosconfig.
+# No talosconfig, unlike talosctl() in common.sh, because these nodes are not a cluster yet.
 tctl() {
   docker run --rm --network host "ghcr.io/siderolabs/talosctl:${TALOSCTL_VERSION}" "$@"
 }
@@ -24,19 +22,17 @@ pull_talosctl() {
   docker pull -q "ghcr.io/siderolabs/talosctl:${TALOSCTL_VERSION}" > /dev/null
 }
 
-# The Talos API is the verdict; ICMP is only context. A Pi 5 in maintenance drops sparse pings while TCP stays
-# solid, because EEE still powers the PHY down between packets until 03d turns it off, and 03d runs after 03c.
-# Measured 20-40% single-packet loss on these NICs against 0% on the x86 node, so a lost ping must not skip
-# the real checks. Three packets rather than one, for the same reason.
+# The Talos API decides. Until 03d turns EEE off, a Pi 5 drops sparse pings while TCP works, so a lost ping
+# must not skip the real checks. Three packets for the same reason.
 check_reachable() {
   local host="$1" ip="$2" icmp
   if ping -c3 -t10 "$ip" > /dev/null 2>&1; then icmp="ok"; else icmp="no reply"; fi
   if nc -z -G2 "$ip" "$API_PORT" > /dev/null 2>&1; then
     ok "reachable, Talos API port ${API_PORT} open (icmp: ${icmp})"
-    [ "$icmp" = "ok" ] || warn "${host} did not answer ICMP; harmless here, the API is what the bring-up needs"
+    [ "$icmp" = "ok" ] || warn "${host} did not answer ICMP. Harmless here, the bring-up needs only the API"
     return 0
   fi
-  bad "unreachable: Talos API port ${API_PORT} closed (icmp: ${icmp}), skipping the rest for this node"
+  bad "unreachable: Talos API port ${API_PORT} closed (icmp: ${icmp}). Skipping the other checks for this node"
   return 1
 }
 
@@ -58,8 +54,7 @@ check_talos_version() {
   fi
 }
 
-# Asserted by NAME only on rpi5, where end0 is fixed and the VIP binds to it. On any other type the name comes
-# from firmware and we hold no expectation, so print what it has and let a human read it.
+# Checked by name on rpi5 only, where end0 is fixed. Elsewhere the name comes from firmware, so print the links.
 check_nic() {
   local ip="$1" type="$2" out rc state indent='           '
   out="$(tctl -n "$ip" get links --insecure 2>&1)"
@@ -74,8 +69,7 @@ check_nic() {
       bad "NIC ${EXPECT_NIC} not found in links"
     fi
   else
-    # Printed, not parsed: the KIND column is empty for a physical NIC, so the field count differs per row and
-    # picking one out by position is guesswork.
+    # Printed, not parsed: KIND is empty for a physical NIC, so the column count differs per row.
     ok "links readable, no name asserted on ${type}. Its wired NIC is one of:"
     printf '%s\n' "${indent}${out//$'\n'/$'\n'${indent}}"
   fi
@@ -91,14 +85,12 @@ check_install_disk() {
     bad "get disks --insecure failed: $(echo "$out" | tail -1)"
   else
     # Printed because the fix is to copy one of these into the node's installDisk.
-    bad "install disk ${disk} (inventory installDisk) not found; the node has:"
+    bad "install disk ${disk} (inventory installDisk) not found. The node has:"
     echo "$out" | tail -n +2 | sed 's/^/           /'
   fi
 }
 
-# Proves the overlay's kernel booted rather than stock arm64. dmesg needs certs, so check the kernel cmdline
-# for the overlay's signature arg instead, which is maintenance-mode safe. A factory image has no equivalent
-# signature worth asserting, so other hardware types get nothing to check.
+# Proves the overlay's kernel booted, not stock arm64. dmesg needs certs in maintenance mode, the cmdline does not.
 check_rpi5_kernel() {
   local ip="$1" out rc
   out="$(tctl -n "$ip" get kernelcmdlines -o yaml --insecure 2>&1)"
@@ -126,11 +118,10 @@ verify_node() {
 
 print_result() {
   if [ "$FAIL" -eq 0 ]; then
-    echo "All nodes good. Next: cluster bring-up, ./03c_talos_cluster_config.sh"
+    echo "All nodes good. Next: cluster bring-up, make init-talos"
   else
-    echo "Some checks failed. This script runs talosctl via the container to avoid the"
-    echo "native macOS 'no route to host' gotcha."
-    echo "Node never appears / NIC or install disk missing -> see Troubleshooting in 03_operating_system.md."
+    echo "Some checks failed. This script runs talosctl in a container, so macOS 'no route to host' is not the cause."
+    echo "For a missing node, NIC or install disk, see Troubleshooting in docs/runbooks/03_operating_system.md."
   fi
 }
 

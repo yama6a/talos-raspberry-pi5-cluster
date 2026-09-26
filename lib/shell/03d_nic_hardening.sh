@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Mitigates the Pi 5 `macb` NIC wedge (siderolabs/sbc-raspberrypi #91): discovers the NIC's facts on a live
-# node, generates machine config from them, applies, verifies, then applies the runtime half (nic-keeper).
+# Hardens the Pi 5 `macb` NIC (siderolabs/sbc-raspberrypi #91): machine config from the live NIC, then nic-keeper.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,23 +7,20 @@ source "${SCRIPT_DIR}/common.sh"
 
 # ---- knobs ----
 HW_TYPE="rpi5"          # the macb wedge is Pi 5-only
-OUTDIR="${CLUSTER_DIR}" # talosconfig + kubeconfig; the lib's talosctl() mounts it as /work
-# Throwaway scratch (discovery capture + patch files). talosctl() mounts it at /scratch, so host paths use
-# ${TALOS_SCRATCH} and the talosctl patch args use /scratch. Survives a failure for inspection, OS-reaped.
+OUTDIR="${CLUSTER_DIR}" # talosctl() mounts it as /work
+# Discovery output and patch files. talosctl() mounts it at /scratch. Kept after a failure.
 TALOS_SCRATCH="$(mktemp -d)"
-KUBECTL_IMAGE="registry.k8s.io/kubectl:v${KUBERNETES_VERSION}" # pinned to the cluster's k8s version, no skew; the tag needs the 'v'
+KUBECTL_IMAGE="registry.k8s.io/kubectl:v${KUBERNETES_VERSION}" # matches the cluster version. The tag needs the v
 # renovate: datasource=docker
-DEBUG_IMAGE="alpine:3.24" # probe pod; apk-installs ethtool
-WATCHDOG_TIMEOUT="15s"    # floored to 10s (Talos min); Pi hw max ~15s
+DEBUG_IMAGE="alpine:3.24" # the probe pod installs ethtool into it
+WATCHDOG_TIMEOUT="15s"    # Talos minimum 10s, Pi hardware maximum about 15s
 APPLY_MODE="no-reboot"    # never silently reboot control-plane nodes
-SETTLE_GRACE=90           # secs before probing: the NIC reconfig takes a while to bounce
-# end0/the VIP, and probing early banks a streak off the old API
-SETTLE_WAIT=180    # secs to poll for the VIP/API to steady (after the grace above)
-SETTLE_STREAK=3    # consecutive /readyz hits required (one success isn't enough)
-SETTLE_INTERVAL=10 # secs between /readyz probes
-# The NIC batching up outbound TCP, the kernel batching up outbound packets, and the NIC coalescing inbound
-# ones. Spelled as kernel feature names, which is what EthernetConfig accepts, NOT the broader umbrella names
-# `ethtool -k` prints: copying those gives you a config Talos rejects.
+SETTLE_GRACE=90           # secs before probing. Earlier probes count answers from before the NIC bounce
+SETTLE_WAIT=180           # secs to poll for a steady API over the VIP, after the grace
+SETTLE_STREAK=3           # consecutive /readyz answers required
+SETTLE_INTERVAL=10        # secs between /readyz probes
+# TCP segmentation, generic segmentation and receive coalescing, as kernel feature names. EthernetConfig
+# rejects the broader names `ethtool -k` prints.
 OFFLOAD_KEYS=(tx-tcp-segmentation tx-generic-segmentation rx-gro)
 PROBE_NS="kube-system" # Talos exempts kube-system from Pod Security
 PROBE_POD="nic-hw-probe"
@@ -50,8 +46,7 @@ ETH_DESIRED=0 # set by generate_patches
 
 # ---- functions ----
 
-# Dockerized kubectl, pinned to the cluster's k8s version, mounting the secrets dir. Shadows any host kubectl
-# deliberately: this repo never assumes one is installed.
+# Dockerized and matched to the cluster version. Shadows any host kubectl on purpose, so none is needed.
 kubectl() { docker run --rm -i --network host -v "${OUTDIR}:/work" \
   -e KUBECONFIG=/work/kubeconfig "${KUBECTL_IMAGE}" "$@"; }
 
@@ -76,8 +71,8 @@ check_prerequisites() {
   [ -f "${OUTDIR}/kubeconfig" ] || die "missing ${OUTDIR}/kubeconfig, run 03c first"
 }
 
-# Nodes of the Pi 5 hardware type, not the talosconfig endpoints: everything here is macb-specific, and the
-# endpoints list is control-plane-only, so it would both miss a Pi worker and target a node with another NIC.
+# Pi 5 nodes from the inventory, not the talosconfig endpoints. Those are control-plane only, so they would
+# miss a Pi worker and include a node with another NIC.
 select_target_nodes() {
   local h nodeinfo
   for h in "${ALL_HOSTS[@]}"; do [ "${NODE_TYPE[$h]}" = "$HW_TYPE" ] && NODES_ARR+=("${NODE_IP[$h]}"); done
@@ -151,17 +146,16 @@ probe_eee_and_watchdog() {
   WD_T="$(wd_secs "$WATCHDOG_TIMEOUT")"
   case "$WD_T" in '' | *[!0-9]*) WD_T=15 ;; esac
   [ "$WD_T" -lt 10 ] && WD_T=10
-  echo "   watchdog: device=${WD_DEV} timeout=${WD_T}s (Talos min 10s; Pi hw max ~15s)"
+  echo "   watchdog: device=${WD_DEV} timeout=${WD_T}s (Talos minimum 10s, Pi hardware maximum about 15s)"
 
-  say "EEE status (captured for the deferred DaemonSet, NOT applied now)"
+  say "EEE status, for reference only. nic-keeper turns EEE off"
   sed -n '/=== EEE ===/,/=== WATCHDOG_DEV ===/p' "$disc" | sed '1d;$d' | sed 's/^/   /'
   cleanup
   echo "   probe pod removed"
 }
 
-# EthernetConfig is delete-then-readd so the features map is authoritative each run: strategic merge UNIONS
-# maps, so a stale or renamed feature key would linger and fail the WHOLE ethtool reconcile ("bit name not
-# found"), leaving every offload unchanged.
+# EthernetConfig is deleted, then added again, so its features map is exact. A patch merges maps, so a stale
+# key would linger and fail the whole ethtool reconcile with "bit name not found".
 generate_patches() {
   local k
   if [ "$RINGS_OK" = 1 ] || [ "${#FEATURES[@]}" -gt 0 ]; then ETH_DESIRED=1; fi
@@ -198,18 +192,18 @@ generate_patches() {
   sed 's/^/   /' "${TALOS_SCRATCH}/${PATCH_FILE}"
 }
 
-# Patched at DOCUMENT level, never a full re-apply, so the live certSAN fix survives.
+# Patches documents only, so the rest of the machine config that 03c applied stays as it is.
 apply_patches() {
   local ip out rc
   say "applying to all nodes (talosctl patch mc, --mode ${APPLY_MODE})"
   for ip in "${NODES_ARR[@]}"; do
-    # Drop any prior EthernetConfig first (clears stale keys); "not found" on fresh nodes is fine.
+    # Delete the old EthernetConfig first. On a fresh node "not found" is fine.
     [ "$ETH_DESIRED" = 1 ] && talosctl -n "$ip" patch mc --patch "@/scratch/${DEL_FILE}" --mode "${APPLY_MODE}" > /dev/null 2>&1
     out="$(talosctl -n "$ip" patch mc --patch "@/scratch/${PATCH_FILE}" --mode "${APPLY_MODE}" 2>&1)"
     rc=$?
     if [ $rc -eq 0 ]; then ok "patched ${ip}"; else
       bad "patch ${ip} failed: $(tail -1 <<< "$out")"
-      grep -qi 'reboot' <<< "$out" && echo "         (a reboot would be required, refusing; not rebooting control-plane nodes)"
+      grep -qi 'reboot' <<< "$out" && echo "         (the change needs a reboot. Refused, this script never reboots a node)"
     fi
   done
 }
@@ -222,7 +216,7 @@ verify_ethernet_config() {
     rxok=0
     txok=0
     offok=0
-    for _ in $( # up to ~150s (the EthernetSpec controller backs off after errors)
+    for _ in $( # up to about 150s, because the EthernetSpec controller backs off after errors
       seq 1 30
     ); do
       st="$(eth_status "$ip")"
@@ -261,16 +255,13 @@ verify_watchdog() {
   done
 }
 
-# The ring-resize re-inits the macb rings, which bounces end0 for a few seconds, and the control-plane VIP
-# rides on end0. The checks above only confirm the CONFIG landed (talosctl hits node IPs directly), not that
-# the VIP is back. Two stages, both needed: a fixed grace first, because probing immediately banks a streak
-# off the OLD still-up API; then poll until it answers SETTLE_STREAK times in a row, because a single good hit
-# is exactly what fooled an earlier version of this.
+# The ring change bounces end0, which carries the VIP, and the checks above hit node IPs directly. A fixed
+# grace first, because probing at once counts answers from before the bounce. Then several answers in a row.
 wait_for_api_steady() {
   local streak=0 deadline
   say "letting the NIC reconfig take effect before probing (grace ${SETTLE_GRACE}s)..."
   sleep "$SETTLE_GRACE"
-  say "waiting for the control-plane API to be steady over the VIP (post-NIC-reconfig settle)"
+  say "waiting for the control-plane API to answer steadily over the VIP"
   deadline=$(($(date +%s) + SETTLE_WAIT))
   until [ "$streak" -ge "$SETTLE_STREAK" ]; do
     if kubectl get --raw='/readyz' > /dev/null 2>&1; then streak=$((streak + 1)); else streak=0; fi
@@ -282,13 +273,11 @@ wait_for_api_steady() {
   echo
   [ "$streak" -ge "$SETTLE_STREAK" ] \
     && ok "control-plane API steady over the VIP (${SETTLE_STREAK}x consecutive /readyz)" \
-    || bad "API not steady ${SETTLE_STREAK}x within ${SETTLE_WAIT}s, let the NIC/VIP settle"
+    || bad "API not steady ${SETTLE_STREAK}x within ${SETTLE_WAIT}s. Let the NIC and VIP settle"
 }
 
-# The runtime half: EEE LPI-wake, silent wedge detection and the post-recovery socket stall need a live agent,
-# which machine config cannot reach. Applied only once the API is proven steady, since this is the first thing
-# to write to it. It runs before any CNI because the DaemonSet tolerates node.kubernetes.io/not-ready and the
-# pod is hostNetwork.
+# Runs only once the API is steady, since this is its first write. The DaemonSet tolerates not-ready nodes
+# and uses the host network, so it needs no CNI.
 apply_nic_keeper() {
   local cm_before cm_after
   say "applying the ${NIC_KEEPER_NAME} DaemonSet (the runtime half)"
@@ -318,12 +307,12 @@ apply_nic_keeper() {
 
 print_result() {
   if [ "$FAIL" -eq 0 ]; then
-    echo "NIC defences applied + verified, both halves:"
-    echo "  machine config (offloads, rings, watchdog) + the ${NIC_KEEPER_NAME} DaemonSet"
-    echo "  (EEE-off, link-watchdog, 'ss -K'). See 03_operating_system.md."
+    echo "NIC fixes applied and verified, both halves:"
+    echo "  machine config for offloads, rings and watchdog, and the ${NIC_KEEPER_NAME} DaemonSet."
+    echo "  See docs/03_operating_system.md."
   else
-    echo "Some checks failed. If 'patch mc' demanded a reboot it was refused (see above);"
-    echo "if the watchdog wasn't armed, lower WATCHDOG_TIMEOUT (Pi hw max ~15s)."
+    echo "Some checks failed. A 'patch mc' that needed a reboot was refused, see above."
+    echo "If the watchdog is not armed, lower WATCHDOG_TIMEOUT. The Pi hardware maximum is about 15s."
   fi
 }
 

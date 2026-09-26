@@ -8,24 +8,22 @@ source "${SCRIPT_DIR}/common.sh"
 usage() {
   cat << EOF
 03c_talos_cluster_config.sh [--reapply] [<host>]
-  (none)      nodes must be in MAINTENANCE: apply insecurely, bootstrap etcd, write the kubeconfig.
-              First bring-up, or a rebuild after DANGEROUS_reset_talos_cluster.sh.
-  --reapply   nodes must already be RUNNING: apply over the Talos API with --mode auto, never bootstrap.
+  (none)      every node in maintenance mode: apply insecurely, bootstrap etcd, write the kubeconfig.
+              For the first bring-up, or a rebuild after DANGEROUS_reset_talos_cluster.sh.
+  --reapply   every node already running: apply over the Talos API with --mode auto, never bootstrap.
               How a config change reaches a live cluster without wiping it.
-  <host>      that node ALONE, from maintenance, without bootstrapping etcd. For putting a replaced node
-              back into an existing cluster, or adding one. certSANs and the talosconfig endpoints still
-              come from the FULL control-plane list, or the node would trust an apiserver cert naming only
-              itself and talosctl would forget the others.
+  <host>      that node only, from maintenance mode, without bootstrapping etcd. To add a node, or to put
+              a replaced one back. certSANs and talosconfig endpoints still come from every control-plane
+              node, or the node would trust a cert that names only itself.
 
-A worker gets a strict subset of the control-plane config: no VIP, no certSANs, no etcd tuning, no bootstrap.
-Which one a node gets comes from its role in inventory.yaml. Requires docker with host networking.
+A worker gets a subset of the control-plane config: no VIP, no certSANs, no etcd tuning, no bootstrap.
+The node's role in inventory.yaml decides which. Needs docker with host networking.
 EOF
 }
 
 # ---- knobs ----
-OUTDIR="${CLUSTER_DIR}" # durable creds; the lib's talosctl() mounts it as /work, so /work == ${OUTDIR}
-# Throwaway render scratch in an OS temp dir, so nothing lingers next to the durable creds and there is
-# nothing to clean up. talosctl() mounts it at /scratch. Survives a mid-run failure for inspection.
+OUTDIR="${CLUSTER_DIR}" # talosctl() mounts it as /work
+# Render files, including the pull token, go to an OS temp dir mounted at /scratch. Kept after a failure.
 TALOS_SCRATCH="$(mktemp -d)"
 
 CLUSTER="$CLUSTER_NAME"
@@ -69,28 +67,26 @@ parse_args() {
 
 print_plan() {
   local h
-  echo "Scratch:  ${TALOS_SCRATCH}   (throwaway render files; OS-reaped)"
+  echo "Scratch:  ${TALOS_SCRATCH}   (render files, removed by the OS)"
   echo "== Talos cluster setup (talosctl ${TALOSCTL_VERSION}, dockerized) =="
   echo "Cluster:  ${CLUSTER}     VIP: ${VIP}     NIC: ${IFACE}     k8s: ${KVER}     EPHEMERAL cap: ${EPHEMERAL}"
   for h in "${TARGETS[@]}"; do
     printf '  %-12s %-16s %-13s %-16s %s\n' "$h" "${NODE_IP[$h]}" "${NODE_ROLE[$h]}" "${NODE_TYPE[$h]}" "${NODE_INSTALL_DISK[$h]}"
   done
   if [ "$REAPPLY" = true ]; then
-    echo "Mode:     REAPPLY to running nodes (--mode auto), NOT bootstrapping etcd"
+    echo "Mode:     reapply to running nodes (--mode auto), no etcd bootstrap"
   elif [ -n "$JOIN_ONE" ]; then
-    echo "Mode:     joining ${JOIN_ONE} ONLY, from maintenance, NOT bootstrapping etcd"
+    echo "Mode:     joining ${JOIN_ONE} only, from maintenance mode, no etcd bootstrap"
   fi
   echo "Output:   ${OUTDIR}"
 }
 
-# Baked into the machine config so the kubelet authenticates EVERY pull from GHCR on every node, with no
-# per-namespace imagePullSecrets. A read:packages PULL token for YOUR private images; the Talos image package
-# is public and needs none. Lands only in the gitignored secrets dir. GitHub Packages only authenticates with
-# a CLASSIC token.
+# Every node authenticates every ghcr.io pull, so no namespace needs imagePullSecrets. GitHub Packages accepts
+# only a classic token. It lands in the render scratch dir and the machine config, never in git.
 build_registries_block() {
   echo
   if [ -z "${GITHUB_GHCR_PULL_TOKEN_SECRET}" ]; then
-    echo "  -> GITHUB_GHCR_PULL_TOKEN_SECRET empty in .env; skipping registry auth (fine if every image is PUBLIC)."
+    echo "   GITHUB_GHCR_PULL_TOKEN_SECRET is empty in .env, so no registry auth. Fine if every image is public."
     return 0
   fi
   REGISTRIES_BLOCK="$(
@@ -103,13 +99,11 @@ build_registries_block() {
           password: ${GITHUB_GHCR_PULL_TOKEN_SECRET}
 EOF
   )"
-  echo "  -> ${GHCR_SERVER} auth (from .env GITHUB_GHCR_PULL_TOKEN_SECRET) baked into the machine config for all nodes."
+  echo "   ${GHCR_SERVER} auth from GITHUB_GHCR_PULL_TOKEN_SECRET goes into every node's machine config."
 }
 
-# The cluster's PKI, and the ONE sticky artifact here: everything else is disposable scratch re-rendered from
-# it each run. Generated once and never rotated, so the cluster identity survives every re-run.
-# With no secrets.yaml but a pre-split controlplane.yaml present, EXTRACT the bundle from it: a plain
-# `gen secrets` would mint a NEW PKI that no longer matches the live nodes and would lock us out.
+# The cluster PKI: generated once and never rotated, so the cluster identity survives every re-run.
+# With only a controlplane.yaml present, extract from it: a fresh `gen secrets` would not match the live nodes.
 ensure_secrets_bundle() {
   [ -f "${OUTDIR}/secrets.yaml" ] && return 0
   if [ -f "${OUTDIR}/controlplane.yaml" ]; then
@@ -121,20 +115,15 @@ ensure_secrets_bundle() {
   fi
 }
 
-# Rendered FRESH each run from the durable secrets plus the CURRENT versions.env and .env, which is why the
-# config is split from the secrets: a version bump actually reaches the nodes instead of being frozen into a
-# controlplane.yaml we kept from last time. --with-secrets reuses secrets.yaml, so this never rotates PKI.
-# Neither base is passed --install-image or --install-disk: the installer ref follows the hardware type and the
-# disk follows the node, so both are patched per node at apply time. gen config still writes its own default
-# into machine.install.disk here; that value never reaches a node, the patch always overrides it.
+# Rendered fresh each run from secrets.yaml and the current versions.env and .env, so a version bump reaches
+# the nodes. No --install-image or --install-disk: both follow the node, so apply_to patches them per node.
 render_base_configs() {
   talosctl gen config "${CLUSTER}" "https://${VIP}:6443" \
     --with-secrets secrets.yaml \
     --kubernetes-version "${KVER}" \
     --output-types controlplane,talosconfig \
     --force
-  # gen config emits talosconfig (durable) and controlplane.yaml (throwaway) into the same dir; move the
-  # throwaway one out so the secrets dir keeps only durable creds.
+  # gen config writes controlplane.yaml next to talosconfig. Move it out, so the secrets dir keeps only creds.
   mv "${OUTDIR}/controlplane.yaml" "${TALOS_SCRATCH}/controlplane.yaml"
 
   if [ "${#WORKER_HOSTS[@]}" -gt 0 ]; then
@@ -147,16 +136,14 @@ render_base_configs() {
   fi
 }
 
-# Set immediately, because `gen config` above just rewrote talosconfig and a freshly generated one has NO
-# endpoints. Doing it here rather than after the apply means aborting anywhere below still leaves a usable
-# talosconfig. Real control-plane IPs, not the VIP; a worker cannot proxy the Talos API so it is never an
-# endpoint, and `-n <worker-ip>` still reaches it through one of these.
+# Right after gen config, which leaves talosconfig with no endpoints, so an abort below still leaves it usable.
+# Control-plane IPs, not the VIP. A worker cannot proxy the Talos API.
 set_talosconfig_endpoints() {
   talosctl config endpoint "${CP_IPS[@]}"
   talosctl config node "${CP_IPS[0]}"
 }
 
-# certSANs name the VIP and the CONTROL-PLANE ips only: a worker serves no apiserver.
+# certSANs name the VIP and the control-plane IPs only. A worker serves no apiserver.
 write_control_plane_patch() {
   local certsans
   certsans="$(printf '      - %s\n' "${VIP}" "${CP_IPS[@]}")"
@@ -164,16 +151,15 @@ write_control_plane_patch() {
 machine:
 ${REGISTRIES_BLOCK}
   kubelet:
-    # Talos runs the kubelet in a container and does NOT auto-propagate /var/mnt mounts into it, so without
-    # this bind a CSI driver's pods cannot see the disk. rshared means mounts made inside the bind are
-    # visible on the host too, which a driver that creates one sub-mount per volume needs.
+    # The kubelet runs in a container that does not see /var/mnt, so a CSI driver needs this bind.
+    # rshared makes the driver's per-volume mounts visible on the host too.
     extraMounts:
       - destination: /var/mnt/storage
         type: bind
         source: /var/mnt/storage
         options: [bind, rshared, rw]
-    # The default image GC only starts at 85% of EPHEMERAL, so every deploy's old tag stays until then. Age-based
-    # GC prunes an image unused for a week regardless of fullness. Age is tracked from kubelet start, not pull.
+    # The default GC starts only at 85% of EPHEMERAL. This removes an image unused for a week, counted from
+    # kubelet start, not from the pull.
     extraConfig:
       imageMaximumGCAge: 168h
   features:
@@ -188,22 +174,20 @@ ${REGISTRIES_BLOCK}
           ip: ${VIP}
 cluster:
   allowSchedulingOnControlPlanes: true
-  # The defaults trigger spurious leader elections during the cold-boot I/O storm: storage replicas, database
-  # startup and image pulls all saturate the single NVMe, etcd fsync stalls past a second, followers time out,
-  # and the election burst lags every watch and informer. Raised 5x, keeping election at 10x heartbeat.
+  # At the defaults, a cold boot saturates the one NVMe, etcd fsyncs stall past a second, and followers call
+  # needless elections that lag every watch. Raised 5x, election still 10x heartbeat.
   etcd:
     extraArgs:
       heartbeat-interval: "500"    # ms (etcd default 100)
       election-timeout: "5000"     # ms (etcd default 1000)
-  # Both keys come from DISABLE_FLANNEL_AND_KUBE_PROXY in .env: 'none'/true leaves the CNI to be installed
-  # separately (a replacement that also takes over kube-proxy), 'flannel'/false keeps the Talos built-in.
+  # From DISABLE_FLANNEL_AND_KUBE_PROXY: none leaves the CNI and kube-proxy to you, flannel keeps Talos' own.
   network:
     cni:
       name: ${CNI_NAME}
   proxy:
     disabled: ${PROXY_DISABLED}
-  # Memory, not CPU, is what runs out on 8 GB Pis next to a 16 GB worker. Weighting free memory 3:1 makes the
-  # scheduler prefer the node with room for it instead of a near-tie decided by CPU requests.
+  # Memory runs out first on the 8 GB Pis. Weighting free memory 3:1 sends pods to the node with room, instead
+  # of a near-tie decided by CPU requests.
   scheduler:
     config:
       apiVersion: kubescheduler.config.k8s.io/v1
@@ -219,31 +203,29 @@ cluster:
                     - {name: cpu, weight: 1}
                     - {name: memory, weight: 3}
   apiServer:
-    # The Talos default of 512Mi is a quarter of what the apiserver really uses here. The scheduler then sees free
-    # memory on the Pis that does not exist and packs them until pods get OOM-killed. cpu restates the Talos default.
+    # The Talos default request is far below real use, so the scheduler overpacks the Pis until pods get
+    # OOM-killed. cpu is the Talos default.
     resources:
       requests:
         cpu: 200m
         memory: 2Gi
-    # The live heap is about 0.8 GB, mostly CRD and OpenAPI schemas, and Go lets the heap grow to twice that
-    # before collecting. The soft limit makes it collect earlier. A re-list storm pushes the live heap past 1 GB,
-    # so a much lower limit would keep the collector running nonstop exactly then.
+    # Go lets the heap reach twice the live size before it collects. This soft limit collects earlier.
+    # Much lower, and a re-list storm would keep the collector running nonstop.
     env:
       GOMEMLIMIT: 1500MiB
-    # Talos audit-logs at Metadata for EVERYTHING by default, which is ~1GB a day per node, mostly leader-election
-    # leases and controller reads. Narrowed to writes of real objects, which is ~1.5% of that and is the part
-    # worth keeping: who created, changed or deleted what.
+    # Talos audits every request by default, mostly leases and controller reads. These rules keep writes to
+    # real objects: who created, changed or deleted what.
     auditPolicy:
       apiVersion: audit.k8s.io/v1
       kind: Policy
       omitStages: [RequestReceived] # one event per request instead of two
       rules:
         - level: None
-          verbs: [get, list, watch] # reads: the bulk of the volume, and nothing here reads them
+          verbs: [get, list, watch] # most of the volume, and nobody reviews them
         - level: None
           resources:
             - group: coordination.k8s.io
-              resources: [leases] # leader election + kubelet heartbeats: 65% of the default log on its own
+              resources: [leases] # leader election and kubelet heartbeats
         - level: None
           resources:
             - group: ""
@@ -256,17 +238,15 @@ ${certsans}
 EOF
 }
 
-# The same kubelet mounts, image GC age and KubePrism, and nothing else. A worker carries no VIP (so no interfaces block
-# either, which keeps a NIC name we cannot predict out of the config), no certSANs, no etcd and no CNI/proxy
-# keys: those are control-plane bootstrap settings a worker never reads.
+# Kubelet mounts, image GC age and KubePrism only. No interfaces block: a worker carries no VIP, and its NIC
+# name depends on the firmware.
 write_worker_patch() {
   [ "${#WORKER_HOSTS[@]}" -gt 0 ] || return 0
   cat > "${TALOS_SCRATCH}/worker-patch.yaml" << EOF
 machine:
 ${REGISTRIES_BLOCK}
   kubelet:
-    # Same bind as the control plane: a storage layer runs on every node that carries a disk, and the
-    # kubelet cannot see /var/mnt without it.
+    # Same bind as the control plane. A storage layer runs on every node with a disk.
     extraMounts:
       - destination: /var/mnt/storage
         type: bind
@@ -281,13 +261,8 @@ ${REGISTRIES_BLOCK}
 EOF
 }
 
-# Cap EPHEMERAL, then let 'storage' take the whole remainder: no maxSize, so it claims what is left, once, at
-# provision time. Talos provisions a volume ONCE, so renaming this on a live cluster orphans the old partition
-# rather than renaming it.
-# Every node carries a disk, so the volume layout does not vary by role and both bases get the same docs.
-# `system_disk` is the disk this node was installed to, so both volumes follow the inventory's installDisk with
-# nothing to keep in sync. Matching on transport instead would miss a SATA node and pick the wrong drive on a
-# node with two NVMes.
+# Talos provisions each volume once, so renaming one on a live cluster orphans the old partition.
+# system_disk follows installDisk. Matching on transport would miss a SATA node or pick the wrong NVMe.
 write_volume_config() {
   cat > "${TALOS_SCRATCH}/volumes.yaml" << EOF
 ---
@@ -316,10 +291,8 @@ EOF
   fi
 }
 
-# A maintenance node answers --insecure; a CONFIGURED one does not, and a freshly-reset node cannot boot
-# configured because STATE is wiped, so this is never fooled by the pre-reset instance: it blocks until the
-# node is genuinely back in maintenance. After a reset the nodes wipe and reboot asynchronously, so without
-# this the insecure apply would fail on one that has not come back yet.
+# Only a maintenance node answers --insecure. After a reset the nodes reboot at their own pace, so this waits
+# until each is really back, or the insecure apply fails on a slow one.
 wait_for_maintenance() {
   local host ip
   say "waiting for nodes in maintenance (up to 5 min each)..."
@@ -328,15 +301,14 @@ wait_for_maintenance() {
     printf '   %-12s %-16s ' "$host" "$ip"
     wait_talos_api "$ip" 300 insecure \
       || {
-        echo "TIMEOUT"
-        die "${ip} not in maintenance after 300s. If it is already RUNNING, you want --reapply."
+        echo "timed out"
+        die "${ip} not in maintenance after 300s. If it is already running, you want --reapply."
       }
     echo "ready"
   done
 }
 
-# The exact opposite test: the node must answer SECURELY, which proves it already holds our PKI and is not
-# sitting in maintenance waiting to be initialised.
+# The opposite test: a secure answer proves the node already holds our PKI.
 assert_nodes_running() {
   local host ip
   say "checking the target nodes are running and hold our PKI"
@@ -349,10 +321,8 @@ assert_nodes_running() {
   done
 }
 
-# Maintenance is the only window where the hardware is visible before the config commits to a disk. REPORTS
-# rather than asserts, because the point is to work with hardware this repo has never seen: the NIC name is
-# firmware-dependent and nothing here depends on it. The install disk is the exception, since getting that
-# wrong writes the wrong device.
+# Reports rather than asserts: the NIC name depends on firmware and nothing here needs it. The install disk
+# is the exception, because the wrong one writes the wrong device.
 report_hardware() {
   local host ip disks disk
   for host in "${TARGETS[@]}"; do
@@ -368,15 +338,9 @@ report_hardware() {
   done
 }
 
-# Hostname goes through the HostnameConfig document (needs Talos >= 1.12), not machine.network.hostname: gen
-# config already ships a HostnameConfig (auto: stable), and setting both errors with "static hostname is
-# already set in v1alpha1 config".
-# install.image, install.disk and the instance-type label are per NODE, not per role, so they ride in their own
-# patch: the installer ref follows the hardware type, the disk is whatever that box boots from, and nic-keeper
-# selects on the label.
-# -e is not optional on the secure path: `gen config --force` rewrote talosconfig and a freshly generated one
-# carries NO endpoints. Without it the apply dies with "failed to determine endpoints". --insecure never
-# needed it, since that dials -n directly.
+# The hostname goes in a HostnameConfig document (needs Talos >= 1.12). gen config already ships one, and also
+# setting machine.network.hostname fails with "static hostname is already set".
+# -e is required on the secure path: gen config --force left talosconfig with no endpoints.
 apply_to() {
   local host="$1"
   shift
@@ -400,19 +364,16 @@ apply_to() {
     "$@"
 }
 
-# Unlike a bring-up, this is being done to a cluster that is currently serving, so show the diff and make the
-# operator confirm.
+# The cluster is serving, so show the dry run and ask first.
 confirm_reapply() {
   local host answer
-  say "dry run: what each node WOULD do with this config"
+  say "dry run: what each node would do with this config"
   for host in "${TARGETS[@]}"; do
     echo "   --- ${host} (${NODE_IP[$host]}) ---"
     apply_to "$host" --mode auto --dry-run 2>&1 | sed 's/^/   /'
   done
-  # Talos provisions a volume once and, with `grow` unset as it is here, never changes an existing volume's
-  # size. So an EPHEMERAL_SIZE edit applies to a NEW node and silently does nothing to these.
-  warn "volume sizes are fixed at provision time; changing them here reaches new nodes only, not these"
-  printf '>> apply to %d running node(s)? some changes reboot. type yes: ' "${#TARGETS[@]}"
+  warn "volume sizes are fixed when a node is first configured. A size change here reaches new nodes only"
+  printf '>> apply to %d running node(s)? Some changes reboot. Type yes: ' "${#TARGETS[@]}"
   read -r answer < /dev/tty 2> /dev/null || answer=""
   [ "$answer" = "yes" ] || die "aborted, nothing applied"
 }
@@ -429,21 +390,18 @@ apply_configs() {
   done
 }
 
-# apply-config from maintenance reboots each node; it comes back serving the API SECURELY with our PKI, so a
-# secure `version` succeeding is the ready signal. Beats guessing a fixed wait. In --reapply the same test
-# covers both outcomes: --mode auto reboots only when the change needs it, and a node that never went away
-# passes on the first poll.
+# A secure `version` answer is the ready signal. With --reapply, a node that did not need a reboot passes at once.
 wait_for_configured() {
   local host ip
   say "waiting for nodes to settle into their configured state (up to 5 min each)..."
-  sleep 10 # let any reboot actually begin (avoids a false 'ready' before it goes down)
+  sleep 10 # let a reboot start, or the old instance answers ready
   for host in "${TARGETS[@]}"; do
     ip="${NODE_IP[$host]}"
     printf '   %-12s %-16s ' "$host" "$ip"
     wait_talos_api "$ip" 300 secure \
       || {
-        echo "TIMEOUT"
-        die "${ip} never came back, check its console/power"
+        echo "timed out"
+        die "${ip} never came back. Check its console and power"
       }
     echo "ready"
   done
@@ -451,29 +409,29 @@ wait_for_configured() {
 }
 
 bootstrap_etcd_and_fetch_kubeconfig() {
-  talosctl bootstrap -n "${CP_IPS[0]}" # ONCE, on the first control-plane node only
+  talosctl bootstrap -n "${CP_IPS[0]}" # once, on the first control-plane node only
   sleep 10
   say "waiting for cluster health (a few minutes)..."
-  talosctl health --wait-timeout 10m || warn "health timed out, verify with kubectl below"
+  talosctl health --wait-timeout 10m || warn "health timed out. Check with kubectl below"
   talosctl kubeconfig .
   say "Done."
   echo "   talosconfig: ${OUTDIR}/talosconfig   (export TALOSCONFIG=${OUTDIR}/talosconfig)"
   echo "   kubeconfig:  ${OUTDIR}/kubeconfig    (export KUBECONFIG=${OUTDIR}/kubeconfig && kubectl get nodes)"
-  echo "   to make that your default kubectl context instead:  make merge-kubeconfig"
+  echo "   to make it your default kubectl context:  make merge-kubeconfig"
 }
 
 print_reapply_result() {
-  say "reapplied to ${#TARGETS[@]} node(s). Nothing was bootstrapped: the cluster was already running."
-  say "Verify: make check-health   and   make talosctl -- -n <ip> get mc v1alpha1 -o yaml"
+  say "reapplied to ${#TARGETS[@]} node(s). Nothing was bootstrapped, the cluster was already running."
+  say "Check: make check-health   and   make talosctl -- -n <ip> get mc v1alpha1 -o yaml"
 }
 
 print_join_result() {
   if [ "${NODE_ROLE[$JOIN_ONE]}" = worker ]; then
-    say "${JOIN_ONE} has its config and is rebooting into it; its kubelet registers on its own."
+    say "${JOIN_ONE} has its config and is rebooting into it. Its kubelet registers by itself."
   else
-    say "${JOIN_ONE} has its config and is rebooting into it; it joins etcd on its own."
+    say "${JOIN_ONE} has its config and is rebooting into it. It joins etcd by itself."
   fi
-  say "Not bootstrapping and not re-fetching the kubeconfig: this cluster already exists."
+  say "No bootstrap and no new kubeconfig, because this cluster already exists."
 }
 
 # ---- main ----

@@ -7,8 +7,8 @@ source "${SCRIPT_DIR}/common.sh"
 
 # ---- knobs ----
 WORKDIR="$(mktemp -d)/rpi-eeprom-build"
-BOOT_ORDER="0xf461" # SD -> NVMe -> USB -> retry
-SD_LABEL="RPIBOOT"  # FAT32 volume name (<=11 chars, UPPERCASE)
+BOOT_ORDER="0xf461" # SD, then NVMe, then USB, then retry
+SD_LABEL="RPIBOOT"  # FAT32 volume name, at most 11 uppercase characters
 
 # ---- state ----
 PIEEPROM_SRC="" # set by pick_bootloader_image
@@ -26,7 +26,7 @@ clone_firmware_repo() {
   cd rpi-eeprom
 }
 
-# Newest stable 2712 image; beta and old are skipped so this lands on a release build.
+# The newest stable 2712 image. Skips beta and old.
 pick_bootloader_image() {
   PIEEPROM_SRC="$(find . -path '*2712*' -name 'pieeprom-*.bin' ! -path '*beta*' ! -path '*old*' | sort | tail -n1)"
   [ -n "${PIEEPROM_SRC}" ] || die "no 2712 pieeprom image found"
@@ -34,7 +34,7 @@ pick_bootloader_image() {
   say "using bootloader: ${PIEEPROM_SRC}"
 }
 
-# Strip any existing copies of our two keys, then append ours; the rest of the default config is preserved.
+# Replaces our two keys and keeps the rest of the default config.
 write_eeprom_config() {
   python3 ./rpi-eeprom-config "${PIEEPROM_SRC}" > boot.conf
   grep -v -E '^(BOOT_ORDER|PCIE_PROBE)=' boot.conf > boot.conf.new || true
@@ -48,8 +48,8 @@ EOF
   echo "-------------------------------"
 }
 
-# pieeprom.bin, not .upd: recovery.bin flashes and then stops without disabling the card, so one card does
-# every node. pieeprom.sig must hold the image's hex sha256 on the first line and nothing else.
+# pieeprom.bin, not .upd: recovery.bin then leaves the card usable, so one card flashes every node.
+# pieeprom.sig must hold only the image's hex sha256, on the first line.
 build_card_payload() {
   python3 ./rpi-eeprom-config --config boot.conf --out pieeprom.bin "${PIEEPROM_SRC}"
   shasum -a 256 pieeprom.bin | cut -d' ' -f1 > pieeprom.sig
@@ -59,7 +59,7 @@ build_card_payload() {
   ls -l ../card
 }
 
-# The WHOLE-DISK id (/dev/disk4), not a partition (/dev/disk4s1).
+# The whole-disk id (/dev/disk4), not a partition (/dev/disk4s1).
 prompt_for_sd_card() {
   diskutil list
   read -r -p ">> enter SD card disk id (e.g. /dev/disk4): " SD_DISK
@@ -84,9 +84,9 @@ write_card() {
 
 print_next_steps() {
   say "Done. Card ejected."
-  echo "   Next (physical): boot each Pi 5 from this card."
-  echo "   success = rapid green LED blink (green screen on HDMI); failure = red + blink code."
-  echo "   then power off, remove the card, move to the next board."
+  echo "   Next: boot each Pi 5 from this card."
+  echo "   Success: the green LED blinks fast, and HDMI shows green. Failure: red LED and a blink code."
+  echo "   Then power off, remove the card and move to the next board."
 }
 
 # ---- main ----

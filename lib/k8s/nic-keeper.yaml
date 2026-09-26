@@ -1,6 +1,5 @@
-# The runtime half of the Pi 5 macb NIC-wedge mitigation; 03d is the machine-config half and applies this.
-# One pod per rpi5 node: EEE-off, a link watchdog, and a post-recovery socket drop. See
-# docs/03_operating_system.md ("NIC hardening").
+# The runtime half of the Pi 5 macb NIC fix. 03d applies it together with the machine-config half.
+# See docs/03_operating_system.md.
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -103,9 +102,7 @@ data:
       sleep "$CHECK_INTERVAL"
     done
 ---
-# hostNetwork so it sees and acts on the host NIC and host-netns sockets. Never calls the k8s API, hence
-# automountServiceAccountToken: false. kube-system because Talos exempts it from Pod Security, which the
-# NET_ADMIN capability needs.
+# kube-system, because Talos exempts it from Pod Security and the pod needs NET_ADMIN.
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -125,26 +122,23 @@ spec:
       labels:
         app.kubernetes.io/name: nic-keeper
     spec:
-      hostNetwork: true
+      hostNetwork: true # acts on the host NIC and the host's sockets
       hostPID: false
       dnsPolicy: ClusterFirstWithHostNet
       automountServiceAccountToken: false
       priorityClassName: system-node-critical
-      # The nodeSelector below already narrows this to one hardware type, so tolerate every taint: the keeper
-      # has to reach a node that is under pressure or tainted out-of-service, which is when its NIC has wedged.
-      # The not-ready toleration the DaemonSet controller adds is also what lets 03d apply this before a CNI.
+      # Tolerates every taint: a wedged NIC is exactly when a node is under pressure or tainted out-of-service.
+      # The nodeSelector already limits it to Pi 5 nodes.
       tolerations:
         - key: node-role.kubernetes.io/control-plane
           operator: Exists
           effect: NoSchedule
         - operator: Exists
-      # Everything this agent does is specific to the Pi 5 macb NIC, so it must not land on any other hardware
-      # type. 03c stamps instance-type from the node's `type` in inventory.yaml.
       nodeSelector:
-        node.kubernetes.io/instance-type: rpi5
+        node.kubernetes.io/instance-type: rpi5 # 03c stamps it from the node's type in inventory.yaml
       containers:
         - name: nic-keeper
-          # Any replacement must ship ethtool, iproute2 (ip + ss) and ping: Talos has no host shell.
+          # A replacement image must ship ethtool, iproute2 and ping. Talos has no host tools to borrow.
           # renovate: datasource=docker
           image: "nicolaka/netshoot:v0.16@sha256:b09d9b21381f47a79b3cbcb30da25266dc17186ea00ae65e99fdc51396f48e70"
           command: ["/bin/sh", "/scripts/nic-keeper.sh"]
@@ -152,8 +146,7 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
-              # NET_ADMIN for ethtool EEE, `ip link` and `ss -K`. NET_RAW for ping's ICMP socket, which
-              # drop:ALL would otherwise remove, false-failing every probe into a false wedge.
+              # NET_ADMIN for ethtool, `ip link` and `ss -K`. NET_RAW for ping, or every probe fails as a false wedge.
               add: ["NET_ADMIN", "NET_RAW"]
           volumeMounts:
             - {name: scripts, mountPath: /scripts, readOnly: true}

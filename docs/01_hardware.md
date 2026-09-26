@@ -1,7 +1,6 @@
-# Homelab cluster hardware choices
+# Hardware
 
-3-node Raspberry Pi 5 Kubernetes cluster, all nodes control-plane (HA, every node runs etcd). Mounted in a 10" 2U
-half-rack mount, NVMe-booted.
+Three Raspberry Pi 5 nodes in a 10-inch 2U rack, all control-plane, booting from NVMe.
 
 ## Bill of materials
 
@@ -14,97 +13,82 @@ half-rack mount, NVMe-booted.
 | PSU        | Raspberry Pi 27W USB-C PD (5.1V/5A)                    | 3                     | [raspberrypi.com](https://www.raspberrypi.com/products/27w-power-supply/) |
 | Cooling    | Pi 5 active cooler (fan + alu heatsink)                | 3                     | [raspberrypi.com](https://www.raspberrypi.com/products/active-cooler/)    |
 
----
-
 ## Compute: 3x Raspberry Pi 5 (8GB)
 
 <img src="images/raspi5.png" alt="Raspberry Pi 5 Board" width="400"/>
 
-- 8GB for headroom: control-plane + etcd + actual workloads on each node.
-- 3 nodes = odd etcd quorum, tolerates 1 failure. Adding a WORKER does not change that: it holds no etcd.
-- The 4th bay takes a worker, and it does not have to be a Pi. The node list carries a hardware type per node
-  and picks the image from it, so an x86 box joins by the same two commands. See
-  [04_worker_nodes.md](04_worker_nodes.md).
+- 8GB, because every node runs the control plane, etcd and workloads.
+- 3 nodes give an odd etcd quorum that survives 1 failure. A worker holds no etcd, so it does not change that.
+- The 4th bay takes a worker, which does not have to be a Pi. See [04_worker_nodes.md](04_worker_nodes.md).
 
 ## Rack mount: GeeekPi DP-0046 (10" 2U)
 
 <img src="images/rackmount_1.jpg" alt="GeeekPi 10 inch rack" height="400"/>
 <img src="images/rackmount_2.png" alt="GeeekPi 10 inch rack" height="400"/>
 
-- GeeekPi DP-0046: a 10" 2U rack mount with PCIe NVMe boards for Pi 5/4B. Same product DeskPi documents as the
-  "Rackmate 2U Rack Mount with PCIe NVMe Board" (GeeekPi / DeskPi are sister brands).
-- Holds up to 4 Pi 5 boards and slots into a standard 10" cabinet, which is the common half-rack size for a
-  homelab.
-- The kit bundles 4x RS-P11 bottom NVMe boards (one per bay), so NVMe per node without buying separate HATs.
+- Holds up to 4 Pi 5 boards and fits a standard 10-inch cabinet.
+- DeskPi sells the same product as the "Rackmate 2U Rack Mount with PCIe NVMe Board". GeeekPi and DeskPi are
+  sister brands.
+- The kit includes one RS-P11 NVMe board per bay, so no separate NVMe HATs to buy.
 
 ## NVMe: bundled RS-P11 boards
 
-The bundled NVMe board is the 52Pi RS-P11 ([EP-0234](https://wiki.52pi.com/index.php?title=EP-0234)), a
-bottom-mount cluster board that sits under the Pi.
+The 52Pi RS-P11 ([EP-0234](https://wiki.52pi.com/index.php?title=EP-0234)) mounts under the Pi.
 
 <img src="images/rs-p11-top.jpg" height="400"/>
 <img src="images/rs-p11-front.jpg" height="400"/>
 
-- M.2 M-key, 2230-2280; (we are using 2280).
-- PCIe Gen2 by default. Pi 5 PCIe is a single Gen2 lane (~450 MB/s). Gen3 is forceable (`dtparam=pciex1_gen=3`,
-  ~800-900 MB/s) but officially unsupported and risks AER errors in a tight thermal box. We expect light IO, so Gen2 is
-  plenty, and we won't risk Gen3 instability.
-- The PD brick goes into the Pi's own side-facing USB-C port. Both USB-C inputs sit on one shared 5V rail over
-  the GPIO pins, so that power feeds down into the RS-P11 and runs the NVMe from there.
-- The RS-P11's own front-facing USB-C port would have been more convenient, backfeeding power up into the Pi.
-  Rejected: it is non-PD and cannot supply the full 5A, which we may need later for bus-powered USB3 HDDs.
+- M.2 M-key, 2230 to 2280. These nodes use 2280.
+- Pi 5 PCIe is a single Gen2 lane, about 450 MB/s. Gen3 can be forced (`dtparam=pciex1_gen=3`, about 800-900
+  MB/s), but it is unsupported and risks AER errors in a warm case. The load is light IO, so Gen2 stays.
+- Power goes into the Pi's own side-facing USB-C port. Both USB-C inputs share one 5V rail over the GPIO pins,
+  so that power also runs the NVMe on the RS-P11.
+- The RS-P11's front USB-C port would be easier to reach, but it is not PD and cannot supply the full 5A.
 
-## Storage: Crucial P310 1TB (without heat spreader)
+## Storage: Crucial P310 1TB, bare PCB
 
-Model CT1000P310SSD8, M.2 2280, ~220 TBW, ~1700 SEK (~$180 USD) (NAND prices still elevated post-2024 shortage).
+Model CT1000P310SSD8, M.2 2280, about 220 TBW.
 
 <img src="images/crucial_p310.png" alt="Crucial P310 SSD" height="200"/>
 
-- Endurance is the binding spec, not speed. All nodes are control-plane, so every node runs etcd with constant
-  fsync/WAL writes. TBW is what matters here.
-- Rejected Crucial E100 (~80 TBW): fine for light IO, but weak once every node is doing fsync-heavy etcd writes
-  around the clock. P310's 220 TBW removes the question for little extra.
-- PCIe Gen3 is possible, but we don't need the speed, and it risks instability, so Gen2 is fine for us.
-- Buy the bare-PCB CT1000P310SSD8, not the CT1000P310SSD5: the SSD5 is the same drive with a heat spreader
-  attached, and it does not clear the gap between the RS-P11 board and the Pi above it. No heat sink is needed
-  here anyway, since the drive is throttled to the Pi's Gen2 lane and sees no sustained heavy IO.
+- Endurance is the spec that decides. Every node runs etcd, so every drive takes constant fsync and WAL writes.
+- The Crucial E100 (about 80 TBW) was rejected: too little endurance for etcd writes around the clock.
+- Buy the bare-PCB CT1000P310SSD8. The CT1000P310SSD5 is the same drive with a heat spreader, and it does not fit
+  between the RS-P11 and the Pi.
+- No heat sink is needed. The Gen2 lane throttles the drive, and it sees no sustained heavy IO.
 
 ## Power: 3x 27W USB-C PD
 
-One 27W USB-C PSU per Pi, plugged directly into the Pi's own USB-C port.
+One 27W USB-C PSU per Pi, plugged into the Pi's own USB-C port.
 
 <img src="images/raspi-pd.jpg" alt="Raspberry Pi 27W Power Supply" height="200"/>
 
-- PD straight into the Pi gives the full 5A, automatically. Plugged into the Pi's own USB-C port it negotiates the full
-  5A / ~25W over PD by itself, and the firmware then raises the downstream USB cap from 600mA to 1.6A on its own, no
-  EEPROM tweak or `config.txt` override needed.
-- Power calculation:
-    - Total from the brick: 5A / ~25W, shared across the whole stack.
-    - Pi compute (SoC + RAM + fan): ~1.8-2A under full load.
-    - NVMe (PCIe): ~0.6-1A, off the board's 5V rail, not counted against the USB cap.
-    - The four USB-A ports: hard-capped at 1.6A / 8W (all 4 ports combined).
-- Headroom for 2.5" HDDs is the reason we want the full 5A. The plan is one bus-powered 2.5" HDD per Pi later; a
-  2.5" drive draws ~4-5W, most of it on spin-up. A second drive would push past the 1.6A USB cap and need its own
-  power source, which is not planned.
-- Downside: the Pi's USB-C is side-facing and harder to reach.
+- Plugged into the Pi, the PSU negotiates the full 5A (about 25W) over PD. The firmware then raises the USB port
+  cap from 600mA to 1.6A. No EEPROM or `config.txt` change is needed.
+- The budget, 5A (about 25W) for the whole stack:
+
+| Load | Draw |
+|---|---|
+| Pi compute (SoC, RAM, fan) under full load | 1.8-2A |
+| NVMe over PCIe, from the 5V rail, not the USB cap | 0.6-1A |
+| The four USB-A ports together | capped at 1.6A (8W) |
+
+- The full 5A leaves room for one bus-powered 2.5-inch HDD per Pi, which draws 4-5W. A second drive would need
+  its own power.
+- The cost: the Pi's USB-C port faces sideways and is harder to reach.
 
 ## Cooling: Pi 5 active cooler + thermal pads
 
-Blower-style active cooler (aluminium heatsink + PWM fan), one per board. Kit included 3 thermal pads. Placement:
+A blower-style cooler with an aluminium heatsink and a PWM fan, one per board. The kit includes 3 thermal pads.
 
 <img src="images/cooler.jpg" alt="Pi 5 cooler with thermal pads" height="300"/>
 
-- CPU (BCM2712 SoC): 1 pad. Primary contact, the tallest die.
-- RP1 I/O chip (southbridge): 2 thermal pads stacked. RP1 sits lower than the SoC, so a single pad left the cooler
-  rocking/not seating flat. Doubling the pad fills the height gap and levels the cooler so both chips get firm contact.
-- No pads on the remaining chips (e.g. PMIC): only 3 pads in the kit, and those run warm rather than hot.
+- CPU (BCM2712 SoC): 1 pad. It is the tallest die and the main contact.
+- RP1 I/O chip: 2 pads stacked. RP1 sits lower than the SoC, and with one pad the cooler rocks. Two pads level
+  it, so both chips get firm contact. RP1 carries USB, Ethernet, GPIO and PCIe, so it is the second-warmest chip.
+- No pads on the other chips, such as the PMIC. The kit has only 3 pads, and those chips run warm, not hot.
 
-RP1 is the one that needs the doubled contact because it is the southbridge carrying USB, Ethernet, GPIO and PCIe
-I/O, making it the second-warmest chip after the SoC.
-
-## End result (assembled)
+## Assembled
 
 <img src="images/assembled_blade.jpg" alt="Assembled Pi 5 Blade" height="250"/>
 <img src="images/assembled_rack.jpg" alt="Assembled Pi 5 Rack" height="250"/>
-
-Granted, the rack still needs a bit of better cable management, but that's a problem for future-me.

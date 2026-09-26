@@ -1,19 +1,16 @@
 #!/usr/bin/env bash
-#
-# Shared helpers for every bootstrap script here. Source it near the top: it self-locates the repo root, loads
-# versions.env then the gitignored .env, parses the gitignored inventory.yaml into the node arrays every script
-# iterates, and derives what a flat file cannot hold (paths, the Talos version).
-# It sets no shell options; each script keeps its own `set` line.
+# Shared helpers. Loads versions.env, .env and inventory.yaml into the variables every script uses.
+# Sets no shell options: each script keeps its own `set` line.
 
 [[ -n "${_COMMON_SH:-}" ]] && return
 _COMMON_SH=1
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-# Sourced FIRST: the derived block below reads it. die() is not defined yet, so error raw.
+# Sourced first, because the derived values below read it. die() is not defined yet.
 VERSIONS_FILE="${REPO_ROOT}/versions.env"
 if [ ! -f "$VERSIONS_FILE" ]; then
-  printf '\033[1;31mERROR: missing %s (committed recipe; it should be in the repo checkout)\033[0m\n' \
+  printf '\033[1;31mERROR: missing %s. It is committed, so check the repo checkout\033[0m\n' \
     "$VERSIONS_FILE" >&2
   exit 1
 fi
@@ -29,29 +26,28 @@ fi
 # shellcheck disable=SC1090
 source "$ENV_FILE"
 
-# Scripts run under `set -u`, so default every key here: an older .env missing one must not trip it.
-# Empty means "skip the feature it enables", see each key's comment in .env.example.
-: "${GITHUB_GHCR_PULL_TOKEN_SECRET:=}"      # 03c bakes into node machine config (kubelet pulls private ghcr.io)
-: "${DISABLE_FLANNEL_AND_KUBE_PROXY:=true}" # defaults to no CNI and no kube-proxy, for a cluster installing its own
-: "${PRE_DRAIN_HEALTH_HOOK:=}"              # 03e runs it before draining each node; empty = nothing gates store health
-: "${PRE_DRAIN_EVACUATE_HOOK:=}"            # 03e runs it once per node after that gate; empty = nothing moves off first
-: "${FORCE_DELETE_SKIP:=}"                  # label selector 03e's force-delete spares; empty = it kills every pod on the node
-: "${REBALANCE_SKIP_NAMESPACES:=}"          # 03g leaves these namespaces alone; empty = restart every stateless Deployment
-: "${REBALANCE_PVC_NAMESPACES:=}"           # 03g restarts PVC-mounting Deployments here too; empty = a PVC always means skip
+# Scripts run under `set -u`, so an older .env missing a key must not trip it. .env.example documents each key.
+: "${GITHUB_GHCR_PULL_TOKEN_SECRET:=}"
+: "${DISABLE_FLANNEL_AND_KUBE_PROXY:=true}" # unset means no CNI and no kube-proxy, for a cluster that installs its own
+: "${PRE_DRAIN_HEALTH_HOOK:=}"
+: "${PRE_DRAIN_EVACUATE_HOOK:=}"
+: "${FORCE_DELETE_SKIP:=}"
+: "${REBALANCE_SKIP_NAMESPACES:=}"
+: "${REBALANCE_PVC_NAMESPACES:=}"
 
-# Pinned by the hardware, not per-deployment, so not in .env.
-EXPECT_NIC="end0"                                     # Pi 5 wired NIC (the VIP binds to it)
-API_PORT=50000                                        # Talos API port
-GHCR_SERVER="ghcr.io"                                 # registry the GHCR pull token is scoped to
-TALOS_IMAGE_REPO="ghcr.io/yama6a/talos-raspberry-pi5" # the Pi 5 Talos image; TALOS_IMAGE_RELEASE pins the tag
-FACTORY_HOST="factory.talos.dev"                      # stock images for node types we don't build (x86)
+# Fixed by the hardware, not per deployment, so not in .env.
+EXPECT_NIC="end0"                                     # the Pi 5 wired NIC. The VIP binds to it
+API_PORT=50000                                        # Talos API
+GHCR_SERVER="ghcr.io"                                 # the registry the GHCR pull token is for
+TALOS_IMAGE_REPO="ghcr.io/yama6a/talos-raspberry-pi5" # the Pi 5 Talos image. TALOS_IMAGE_RELEASE pins the tag
+FACTORY_HOST="factory.talos.dev"                      # stock images for hardware without a custom build
 
-# Cannot live in a flat .env: interpolation and a derived version.
-IFACE="${EXPECT_NIC}" # wired NIC the VIP binds to (dhcp + vip)
-# The image release tag is `<talos version>-<build revision>`; everything Talos-side wants just the version.
+# Derived, so they cannot live in a flat .env.
+IFACE="${EXPECT_NIC}"
+# The release tag is `<talos version>-<build revision>`. Everything Talos-side wants only the version.
 TALOS_VERSION="${TALOS_IMAGE_RELEASE%-*}"
-TALOSCTL_VERSION="${TALOS_VERSION}"      # talosctl container (talosctl() below; boot-verify)
-IMAGE_CACHE="${REPO_ROOT}/.cache/images" # 03a downloads each node type's raw image here (gitignored)
+TALOSCTL_VERSION="${TALOS_VERSION}"      # the talosctl container tag
+IMAGE_CACHE="${REPO_ROOT}/.cache/images" # 03a's downloads, gitignored
 
 say() { printf '\n\033[1;36m>> %s\033[0m\n' "$*"; }
 die() {
@@ -105,39 +101,33 @@ case "$DISABLE_FLANNEL_AND_KUBE_PROXY" in
 esac
 
 # ---- the node inventory ----
-# Parsed below require()/die() rather than with the other derived values, because it needs both. A malformed
-# inventory therefore fails at the top of EVERY script, not halfway into whichever one first reads a field.
+# Parsed at source time, so a malformed inventory fails at the top of every script, not halfway into one.
 INVENTORY="${REPO_ROOT}/inventory.yaml"
 [ -f "$INVENTORY" ] || die "missing ${INVENTORY}
        copy the template and edit it:  cp inventory.example.yaml inventory.yaml"
-# A leftover CLUSTER_NODES is no longer read as an array, so \${#CLUSTER_NODES[@]} would quietly be 1 and the
-# node-count gates would compare against the wrong number. Fail instead of being subtly wrong.
-[ -z "${CLUSTER_NODES:-}" ] || die "CLUSTER_NODES is still set in .env; the node list moved to inventory.yaml. Delete that line."
+# A leftover CLUSTER_NODES from an older .env would make the node-count checks compare against 1.
+[ -z "${CLUSTER_NODES:-}" ] || die "CLUSTER_NODES is still set in .env. The node list lives in inventory.yaml, so delete that line."
 require yq
 
 declare -A NODE_IP NODE_ROLE NODE_TYPE NODE_IMAGE_SOURCE NODE_IMAGE_FILE NODE_IMAGE_SCHEMATIC NODE_INSTALL_DISK
 ALL_HOSTS=()
 ALL_IPS=() # every node, in inventory order
 CP_HOSTS=()
-CP_IPS=() # role controlplane: these carry the VIP, etcd and the apiserver certSANs
+CP_IPS=() # these carry the VIP, etcd and the apiserver certSANs
 WORKER_HOSTS=()
-WORKER_IPS=() # role worker
-# No hardware-specific subsets here on purpose: 03b and 03d each filter on NODE_TYPE themselves, next to the
-# checks and the config that are specific to that hardware. This file stays inventory data, not policy.
+WORKER_IPS=()
+# No per-hardware subsets here: 03b and 03d filter on NODE_TYPE next to their hardware-specific checks.
 
-# ONE yq call for the whole file, so sourcing costs a single subprocess however many nodes there are.
-# Joined on '|' and NOT @tsv: tab is an IFS whitespace character, so `read` collapses a run of them and the
-# optional imageSchematic would silently shift every later field one to the left.
+# Joined on '|', not @tsv: `read` collapses a run of tabs, so an empty imageSchematic would shift every later field.
 while IFS='|' read -r _h _ip _role _type _src _file _sch _disk; do
   [ -n "$_h" ] || continue
   for _f in ip:"$_ip" role:"$_role" type:"$_type" imageSource:"$_src" imageFile:"$_file" installDisk:"$_disk"; do
     [ -n "${_f#*:}" ] || die "inventory: node '${_h}' is missing ${_f%%:*}"
   done
   case "$_role" in controlplane | worker) ;; *) die "inventory: node '${_h}' has role '${_role}', want controlplane or worker" ;; esac
-  # Both directions, so imageSource and imageSchematic cannot quietly disagree: a missing schematic would send
-  # the factory a 404, and a stray one on a release node would be read by nothing.
+  # Checked both ways, so imageSource and imageSchematic cannot disagree.
   case "$_src" in
-    github-release) [ -z "$_sch" ] || die "inventory: node '${_h}' is imageSource github-release, so drop its imageSchematic; nothing reads it" ;;
+    github-release) [ -z "$_sch" ] || die "inventory: node '${_h}' is imageSource github-release, so drop its imageSchematic. Nothing reads it" ;;
     image-factory) [ -n "$_sch" ] || die "inventory: node '${_h}' is imageSource image-factory, so it needs an imageSchematic" ;;
     *) die "inventory: node '${_h}' has imageSource '${_src}', want github-release or image-factory" ;;
   esac
@@ -165,8 +155,7 @@ done < <(yq -r '.nodes[] | [.host, .ip, .role, .type, .imageSource, .imageFile, 
 [ "$(printf '%s\n' "${ALL_IPS[@]}" | sort -u | grep -c .)" -eq "${#ALL_IPS[@]}" ] \
   || die "inventory: two nodes share an IP"
 
-# The installer image `talosctl upgrade` writes to a node. The ONE place the two image sources are resolved,
-# so the flasher and the upgrade cannot disagree about where a node's bits come from.
+# The one place the installer ref is resolved, so 03c and 03e cannot disagree about a node's image.
 installer_ref_for() {
   local h="$1"
   case "${NODE_IMAGE_SOURCE[$h]:-}" in
@@ -176,8 +165,7 @@ installer_ref_for() {
   esac
 }
 
-# POSTs the extension set and gets back the id that addresses both the raw image and the installer built from
-# it. Idempotent server-side, so there is no id to pin and none to go stale.
+# The id is a content hash of the schematic, so there is no id to pin and none to go stale.
 _SCHEMATIC_ID=""
 factory_schematic_id() {
   [ -n "$_SCHEMATIC_ID" ] && {
@@ -193,8 +181,7 @@ factory_schematic_id() {
   printf '%s\n' "$_SCHEMATIC_ID"
 }
 
-# Accepts both spellings because callers pass `true` and `1` about evenly. A gate that recognised only one
-# would prompt in an unattended run, and an orchestrator with no stdin reads that as an abort.
+# Accepts `true` and `1`, because callers use both. A missed spelling would prompt in an unattended run and abort.
 assume_yes() { case "${ASSUME_YES:-}" in true | 1 | yes | YES) return 0 ;; *) return 1 ;; esac }
 
 confirm() {
@@ -204,11 +191,9 @@ confirm() {
   [[ "$a" =~ ^[Yy]$ ]]
 }
 
-# Destructive-action gate: make the operator type a word, because y is too easy to hit by reflex. Both return
-# non-zero on a mismatch so the caller picks its own abort message and exit code.
-#   confirm_word        <WORD> <prompt>  honours ASSUME_YES, for steps an orchestrator drives unattended
-#   confirm_word_always <WORD> <prompt>  ignores it, for the gates that wipe the cluster. An ASSUME_YES left
-#                                        over from an earlier command must never be able to skip those.
+# A typed word, because y is too easy to hit by reflex. The caller picks the abort message.
+#   confirm_word        <WORD> <prompt>  honours ASSUME_YES, for steps an orchestrator runs unattended
+#   confirm_word_always <WORD> <prompt>  ignores it, so a leftover ASSUME_YES can never skip a cluster wipe
 _ask_word() {
   local a
   read -r -p ">> ${2:+$2 }type $1 to proceed: " a
@@ -220,17 +205,16 @@ confirm_word() {
 }
 confirm_word_always() { _ask_word "$@"; }
 
-CLUSTER_DIR="${REPO_ROOT}/secrets" # the only real talosconfig + kubeconfig; a symlink to an off-repo store
+CLUSTER_DIR="${REPO_ROOT}/secrets" # talosconfig and kubeconfig. A symlink to an off-repo store
 
 use_kubeconfig() {
-  export KUBECONFIG="${CLUSTER_DIR}/kubeconfig" # the 03c kubeconfig (points at the VIP)
-  [ -f "$KUBECONFIG" ] || die "missing ${KUBECONFIG}, run step 03 (03c) first"
+  export KUBECONFIG="${CLUSTER_DIR}/kubeconfig" # written by 03c, points at the VIP
+  [ -f "$KUBECONFIG" ] || die "missing ${KUBECONFIG}. Run 03c first"
 }
 assert_api() { kubectl get nodes > /dev/null 2>&1 || die "kubectl can't reach the API via ${KUBECONFIG}"; }
 
-# Dockerized because the macOS talosctl build is unreliable here.
-# TALOS_SCRATCH (optional): a host temp dir mounted at /scratch for throwaway render files that must be
-# container-visible but must NOT persist in the durable secrets dir. Unset means not mounted.
+# Dockerized, because the macOS talosctl build is unreliable.
+# TALOS_SCRATCH, if set, is mounted at /scratch for render files that must not land in the secrets dir.
 talosctl() {
   docker run --rm -i --network host \
     -v "${CLUSTER_DIR}:/work" -w /work \
@@ -239,11 +223,9 @@ talosctl() {
     "ghcr.io/siderolabs/talosctl:${TALOSCTL_VERSION}" "$@"
 }
 
-# wait_talos_api <ip> <timeout-secs> <secure|insecure> [poll-secs]: block until the node's Talos API answers,
-# printing a dot per attempt. Returns non-zero on timeout instead of dying, so each caller writes its own
-# diagnosis: "not in maintenance" and "never came back" are the same wait but very different advice.
-# insecure = maintenance mode, no talosconfig needed. nc gates the call because talosctl against a down node
-# blocks for its own timeout, which stalls the dots and makes the wait look hung.
+# wait_talos_api <ip> <timeout-secs> <secure|insecure> [poll-secs]. Returns non-zero on timeout, so each
+# caller gives its own advice. insecure means maintenance mode.
+# nc goes first, because talosctl against a down node blocks for its own timeout and the wait looks hung.
 wait_talos_api() {
   local ip="$1" secs="$2" mode="$3" poll="${4:-5}" deadline
   local args=(-e "$ip" -n "$ip" version)
@@ -260,15 +242,14 @@ wait_talos_api() {
   done
 }
 
-# The caller sets STEP=0 and STEP_TOTAL=<n> once; every step goes through step()/run_step(), so adding or
-# removing a step only changes STEP_TOTAL, never a hand-written number.
+# The caller sets STEP=0 and STEP_TOTAL=<n> once. Adding a step then changes only STEP_TOTAL.
 step() {
   STEP=$((STEP + 1))
   say "STEP ${STEP}/${STEP_TOTAL}, $*"
 }
 
-# run_step <label> <dir> <script> [best-effort] [hint]: runs <dir>/<script> in a subshell with stdin detached,
-# then dies (default) or warns and returns 1 (best-effort). The 5th arg overrides the recovery hint.
+# run_step <label> <dir> <script> [best-effort] [hint]. Stdin is detached. On failure it dies, or with
+# best-effort warns and returns 1. The hint replaces the default recovery advice.
 run_step() {
   local label="$1" dir="$2" script="$3" mode="${4:-fatal}" hint="${5:-}"
   step "${script} (${label})"
@@ -277,8 +258,8 @@ run_step() {
     return 0
   fi
   if [ "$mode" = best-effort ]; then
-    warn "${hint:-${script} did not complete; re-run it by hand + commit/push if needed}"
+    warn "${hint:-${script} did not complete. Re-run it by hand}"
     return 1
   fi
-  die "${hint:-${script} failed, fix and resume from ${script%.sh} by hand}"
+  die "${hint:-${script} failed. Fix it and resume from ${script%.sh} by hand}"
 }

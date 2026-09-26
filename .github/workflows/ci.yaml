@@ -1,5 +1,5 @@
-# Static checks only, no cluster. Each job NAME is a required check context in gha's repo-settings.sh
-# table (shell, yaml, renovate-config), so renaming a job here strands the protection rule there.
+# Static checks only, no cluster. Each job name is a required check in gha's scripts/repo-settings.sh,
+# so renaming a job here needs the same rename there.
 name: CI
 
 on:
@@ -27,8 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: yama6a/gha/.github/actions/yaml-checks@v2
-      # Schema-checks what 03d applies. Core types only, so the CRD catalog is not needed, and a
-      # kind with no schema is a mistake here rather than something to skip.
+      # Schema-checks what 03d applies. Core types only, so a kind with no schema is a mistake, not a skip.
       - uses: yama6a/gha/.github/actions/kubeconform@v2
         with:
           paths: lib/k8s/*.yaml
@@ -40,7 +39,7 @@ jobs:
     runs-on: ubuntu-26.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # A broken config silently halts ALL dependency updates.
+      # A broken config stops every dependency update without an error.
       - uses: yama6a/gha/.github/actions/validate-renovate-config@v2
         with:
           config-file: renovate.json5
