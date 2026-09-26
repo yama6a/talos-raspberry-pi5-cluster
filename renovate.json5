@@ -1,25 +1,13 @@
 {
-  // Opens dependency-update PRs for every pin in the repo. Which manager owns what:
-  //   github-actions  the renovate workflow's own action pins
-  //   customManagers  images in the k8s manifests + shell scripts, and the versions.env pins
-  // Cadence is the cron in .github/workflows/renovate.yaml, not an internal `schedule`, so a manual
-  // workflow_dispatch works too. Docs: docs/06_renovate.md.
-  //
-  // The shared preset carries the grouping, automerge and digest-pinning rules. Only what is specific
-  // to this repo lives below.
-  // Nothing here applies itself: a merged bump only changes a pinned string. TALOS_IMAGE_RELEASE and
-  // KUBERNETES_VERSION take effect when 03e/03f run, the nic-keeper image when 03d runs, and a fresh
-  // drive needs 03a. To de-risk anyway, add minimumReleaseAge or drop automerge from the deps to gate.
+  // The shared preset holds grouping, automerge and digest pinning. The cadence is the cron in
+  // .github/workflows/renovate.yaml, not a `schedule` here, so a manual run works too. See docs/06_renovate.md.
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   extends: ["github>yama6a/gha:default.json5"],
 
-  // Nothing here is packaged or templated: the one thing this repo applies is a plain manifest in lib/k8s/,
-  // so every container image is annotated and picked up by the customManager below.
+  // Nothing here is packaged or templated, so every image carries a `# renovate:` comment for these managers.
   customManagers: [
     {
-      // Images annotated `# renovate: datasource=docker`: the k8s manifests, shell-script literals, and the
-      // versions.env extensions.
-      // Captures repo:tag(+digest) from the ref itself, so tag AND digest stay fresh.
+      // Captures repo:tag and the optional digest from the ref itself, so both stay current.
       customType: "regex",
       description: "docker image refs (annotated) in k8s manifests, shell scripts and versions.env",
       managerFilePatterns: [
@@ -33,9 +21,8 @@
       datasourceTemplate: "docker",
     },
     {
-      // Scalar vars in versions.env carrying a full `# renovate:` annotation. TALOS_IMAGE_RELEASE's
-      // annotation also carries a `versioning=regex:...`, because its `-<build revision>` suffix would
-      // otherwise read as a semver prerelease and be skipped as unstable.
+      // TALOS_IMAGE_RELEASE's annotation adds `versioning=regex:`, or its `-<build revision>` suffix reads as a
+      // semver prerelease and gets skipped as unstable.
       customType: "regex",
       description: "annotated version scalars in versions.env",
       managerFilePatterns: ["/^versions\\.env$/"],
@@ -47,7 +34,7 @@
 
   packageRules: [
     {
-      // k8s release tags are v-prefixed and the versions.env value is not, so strip the v when comparing.
+      // Kubernetes tags start with v and the versions.env value does not.
       description: "kubernetes tags are v-prefixed",
       matchPackageNames: ["kubernetes/kubernetes"],
       extractVersion: "^v(?<version>.+)$",

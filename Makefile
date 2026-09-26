@@ -1,7 +1,4 @@
-# A thin dispatcher over the numbered runbook scripts. Holds NO logic, versions or values: every target just
-# runs the step script it names, so `make init-talos` and running lib/shell/03c_talos_cluster_config.sh by
-# hand are identical. `make help` lists everything. The health targets need a live cluster and a populated
-# .env. This repo stops at a configured cluster and a kubeconfig; nothing that runs ON it lives here.
+# Dispatches to lib/shell and holds no logic, versions or values. `make init-talos` equals running 03c by hand.
 
 .DEFAULT_GOAL := help
 
@@ -9,43 +6,43 @@
 help: ## Display this help.
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
-##@ Cluster lifecycle  (DANGEROUS: destructive; each prompts for a typed confirmation)
+##@ Cluster lifecycle  (destructive, each asks for a typed confirmation)
 .PHONY: bootstrap-cluster
-bootstrap-cluster: ## DANGER: first-time init of freshly-flashed nodes -> configured cluster + kubeconfig (archives old creds).
+bootstrap-cluster: ## DANGER: first bring-up of freshly flashed nodes, to a configured cluster and a kubeconfig. Archives old creds.
 	bash lib/shell/DANGEROUS_bootstrap_cluster.sh
 
 .PHONY: reset-cluster
-reset-cluster: ## DANGER: wipe all nodes (STATE + EPHEMERAL + the storage volume) back to maintenance.
+reset-cluster: ## DANGER: wipe every node (STATE, EPHEMERAL, the storage volume) back to maintenance mode.
 	bash lib/shell/DANGEROUS_reset_talos_cluster.sh
 
-##@ Node image & Talos bring-up  (step 02-03; the talos steps run their tooling in Docker)
+##@ Node image and Talos bring-up  (steps 02 and 03, Talos tooling runs in Docker)
 .PHONY: build-eeprom-card
-build-eeprom-card: ## 02: build a reusable SD card that flashes the Pi 5 EEPROM (boot order / PCIe probe).
+build-eeprom-card: ## 02: build a reusable SD card that flashes the Pi 5 EEPROM boot order and PCIe probe.
 	bash lib/shell/02_raspi_eeprom.sh
 
 .PHONY: flash-talos-nvme
-flash-talos-nvme: ## 03a: download a node's Talos image and write it to an NVMe SSD over USB. NODE=<hostname> picks which image; omit it to choose from a list.
+flash-talos-nvme: ## 03a: download a node's Talos image and write it to an NVMe over USB. NODE=<hostname> picks the image, or choose from a list.
 	bash lib/shell/03a_talos_image_flasher.sh $(NODE)
 
 .PHONY: verify-talos-boot
-verify-talos-boot: ## 03b: verify freshly-flashed nodes boot into maintenance mode (the inventory's bootVerify nodes).
+verify-talos-boot: ## 03b: check that every freshly flashed node booted into maintenance mode.
 	bash lib/shell/03b_talos_boot_verify.sh
 
 .PHONY: init-talos
-init-talos: ## 03c: FIRST bring-up. Needs EVERY node in maintenance (fresh flash, or after reset-cluster): applies config, bootstraps etcd, writes kube/talosconfig.
+init-talos: ## 03c: first bring-up. Every node in maintenance mode. Applies config, bootstraps etcd, writes kubeconfig and talosconfig.
 	bash lib/shell/03c_talos_cluster_config.sh
 
 .PHONY: add-node
-add-node: ## 03c: configure and join ONE node from maintenance into the RUNNING cluster (control-plane or worker), no etcd bootstrap. NODE=<hostname>.
+add-node: ## 03c: join one node from maintenance mode into the running cluster, with no etcd bootstrap. NODE=<hostname>.
 	@test -n "$(NODE)" || { echo "usage: make add-node NODE=talos-w1   (hostnames come from inventory.yaml)"; exit 1; }
 	bash lib/shell/03c_talos_cluster_config.sh $(NODE)
 
 .PHONY: reapply-talos-config
-reapply-talos-config: ## 03c: push a changed machine config to nodes that are already RUNNING (dry-run + confirm first). NODE=<hostname> for one, omit for all.
+reapply-talos-config: ## 03c: push a changed machine config to running nodes, after a dry run and a confirm. NODE=<hostname> for one, omit for all.
 	bash lib/shell/03c_talos_cluster_config.sh --reapply $(NODE)
 
 .PHONY: harden-nics
-harden-nics: ## 03d: NIC hardening for every node: machine config (offloads/rings/watchdog) + the nic-keeper DaemonSet.
+harden-nics: ## 03d: harden the Pi 5 NICs: machine config for offloads, rings and watchdog, plus the nic-keeper DaemonSet.
 	bash lib/shell/03d_nic_hardening.sh
 
 .PHONY: upgrade-talos
@@ -61,34 +58,29 @@ rebalance-workloads: ## 03g: rolling-restart the stateless Deployments so the sc
 	bash lib/shell/03g_rebalance_workloads.sh
 
 .PHONY: recover-node
-recover-node: ## 05: rejoin ONE wiped/replaced node and fix what does not self-heal. NODE=<hostname>, add YES=1 to skip the prompt.
+recover-node: ## 05: rejoin one wiped or replaced node and fix what does not heal by itself. NODE=<hostname>, YES=1 skips the prompt.
 	@test -n "$(NODE)" || { echo "usage: make recover-node NODE=talos-cp3 [YES=1]"; exit 1; }
 	bash lib/shell/recover_node.sh $(NODE) $(if $(YES),--yes,)
 
-##@ Kubeconfig  (point your kubectl at the cluster; merge-kubeconfig is the handover out of this repo)
+##@ Kubeconfig  (point kubectl at the cluster. merge-kubeconfig is the handover out of this repo)
 .PHONY: merge-kubeconfig
-merge-kubeconfig: ## Merge the 03c kubeconfig into ~/.kube/config and make it the active context (timestamped backup).
+merge-kubeconfig: ## Merge the 03c kubeconfig into ~/.kube/config and make it the active context. Backs up the old file first.
 	bash lib/shell/merge_kubeconfig.sh
 
 .PHONY: print-kubeconfig
-print-kubeconfig: ## Print the 03c kubeconfig export line, for pointing ONE shell at the cluster without touching ~/.kube/config.
+print-kubeconfig: ## Print an export line that points one shell at the cluster and leaves ~/.kube/config alone.
 	@bash -c 'source lib/shell/common.sh && echo "export KUBECONFIG=$$CLUSTER_DIR/kubeconfig"'
 
-##@ Health & inspection  (read-only; use the dockerized talosctl + the 03c kubeconfig)
+##@ Health and inspection  (read-only, through the dockerized talosctl)
 .PHONY: check-health
-check-health: ## Talos: wait for and report overall cluster health.
+check-health: ## Wait for and report Talos cluster health.
 	@bash -c 'source lib/shell/common.sh && talosctl health'
 
 .PHONY: talosctl
-talosctl: ## Run dockerized talosctl, e.g. `make talosctl get members`. Any FLAG needs a `--` first: `make talosctl -- -n <ip> etcd members`.
+talosctl: ## Run dockerized talosctl, e.g. `make talosctl get members`. A flag needs `--` first: `make talosctl -- -n <ip> etcd members`.
 	@bash -c 'source lib/shell/common.sh && talosctl $(filter-out $@,$(MAKECMDGOALS))'
 
-# Words after `make talosctl ...` (get, members, services, ...) are extra goals to Make; this no-op catch-all
-# swallows them so they're passed to talosctl instead of erroring. Explicit targets above still take priority,
-# so a mistyped real target quietly no-ops rather than erroring, the one cost of positional passthrough args.
-#
-# A flag never reaches talosctl on its own: Make claims it first, and `-n` is Make's own --just-print, so
-# `make talosctl -n <ip> etcd members` silently prints the command instead of running it. Put a `--` before
-# the first flag and Make stops parsing options: `make talosctl -- -n <ip> etcd members`.
+# Swallows the words after `make talosctl` as no-op goals, so talosctl gets them. A mistyped target no-ops too.
+# Flags need `--` first: without it Make reads `-n` as its own --just-print and runs nothing.
 %:
 	@:

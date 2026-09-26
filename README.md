@@ -11,11 +11,11 @@
   <img src="docs/images/rackmount_0.jpeg" alt="The assembled 3-node Raspberry Pi 5 cluster in a 10-inch rack" width="600">
 </p>
 
-> Hardware, OS and cluster bring-up, documented end to end. Flash the NVMe drives, configure Talos, bootstrap
-> etcd, and hand over a working `kubeconfig`. It stops there: nothing that runs *on* the cluster lives here.
->
-> The node image is built separately, in
-> [talos-raspberry-pi5](https://github.com/yama6a/talos-raspberry-pi5); this repo consumes its releases.
+- Hardware, OS and cluster bring-up: flash the NVMe drives, configure Talos, bootstrap etcd, hand over a
+  `kubeconfig`.
+- It stops there. Nothing that runs on the cluster lives here.
+- The node image is built in [talos-raspberry-pi5](https://github.com/yama6a/talos-raspberry-pi5). This repo
+  consumes its releases.
 
 ## Contents
 
@@ -25,29 +25,34 @@
 - [Getting started](#getting-started)
 - [Where this repo stops](#where-this-repo-stops)
 - [Day-2 operations](#day-2-operations)
-- [Troubleshooting](#troubleshooting)
 - [Documentation](#documentation)
 - [Contributing](CONTRIBUTING.md)
 - [License](#license) and [Credits](#credits)
 
 ## Overview
 
-- Three Raspberry Pi 5s, every node a control-plane node: HA etcd, workloads co-located.
-- Booting Talos off NVMe. Talos ships no official Pi 5 image, so this flashes a release of
-  [yama6a/talos-raspberry-pi5](https://github.com/yama6a/talos-raspberry-pi5): a Raspberry Pi kernel at 4K pages
-  (some storage software does not cope with 16K), plus the extensions the cluster needs.
-- A 4th bay takes a worker, and it does not have to be a Pi: the node list carries a hardware type per node and
-  resolves the image from it, so an x86 box joins from Image Factory by the same two commands.
-- Config is three files: committed `versions.env` (the renovate-managed Talos + Kubernetes pins), plus gitignored
-  `inventory.yaml` (your nodes) and `.env` (VIP, sizing, registry auth), each copied from a committed template.
-  Nothing is hardcoded in a script.
-- One Kubernetes object is applied from here, because it is pure hardware mitigation: the `nic-keeper`
-  DaemonSet, the runtime half of what `03d` does at the machine-config level. `03d` applies it.
+- Three Raspberry Pi 5 boards, every one a control-plane node. etcd runs on all three, and workloads share the
+  same nodes.
+- Talos boots from NVMe. Talos ships no Pi 5 image, so the nodes run a release of
+  [talos-raspberry-pi5](https://github.com/yama6a/talos-raspberry-pi5). It has a Raspberry Pi kernel with 4K
+  pages, plus the extensions the cluster needs.
+- A 4th bay takes a worker, and it does not have to be a Pi. Each node in `inventory.yaml` names its hardware
+  type, and the scripts pick its image from that.
+- One Kubernetes object is applied from here: the `nic-keeper` DaemonSet. It is the runtime half of the Pi 5 NIC
+  fix, and `03d` applies it.
+
+Config lives in three files. No script hardcodes a value.
+
+| File | Committed | Holds |
+|---|---|---|
+| `versions.env` | yes | the Talos image release and the Kubernetes version. Renovate bumps both |
+| `inventory.yaml` | no, copy `inventory.example.yaml` | one entry per node: role, hardware type, image source |
+| `.env` | no, copy `.env.example` | cluster name, VIP, sizing, hooks, registry auth |
 
 ## Hardware
 
-3x Raspberry Pi 5 (8 GB), all control-plane, NVMe-booted, in a 10" 2U half-rack. See
-[docs/01_hardware.md](docs/01_hardware.md) and [docs/04_worker_nodes.md](docs/04_worker_nodes.md).
+Three Raspberry Pi 5 (8 GB) boards in a 10-inch 2U rack, booting from NVMe. Parts and reasons are in
+[docs/01_hardware.md](docs/01_hardware.md).
 
 | Component    | Choice                                       | Qty                  |
 |--------------|----------------------------------------------|----------------------|
@@ -58,94 +63,75 @@
 | Power        | 27 W USB-C PD (5.1 V / 5 A)                  | 3                    |
 | Cooling      | Pi 5 active cooler + aluminum heat sink      | 3                    |
 
-Why these parts:
-
-- Endurance-focused SSDs: all-control-plane means constant fsync-heavy etcd writes.
-- 8 GB: headroom for co-locating etcd and workloads.
-- Power delivery into the Pi's own USB-C port, which is the only way to get the full 5 A.
-
 ## Repository layout
 
 ```
 .
-|-- Makefile                # thin dispatcher over lib/shell; run `make help`
-|-- versions.env            # committed: the Talos + Kubernetes pins (renovate-managed)
-|-- inventory.example.yaml  # template for the node list; copy to inventory.yaml
-|-- .env.example            # template for config + secrets; copy to .env
-|-- docs/                   # the numbered runbook + decision records (01 to 06)
+|-- Makefile                # thin dispatcher over lib/shell. Run `make help`
+|-- versions.env            # committed: the Talos and Kubernetes pins, bumped by Renovate
+|-- inventory.example.yaml  # template for the node list. Copy to inventory.yaml
+|-- .env.example            # template for config and secrets. Copy to .env
+|-- docs/                   # decision docs (01 to 06)
+|   `-- runbooks/           # the procedures, one per decision doc
 |-- lib/
-|   |-- shell/              # every bootstrap script + the shared common.sh
+|   |-- shell/              # every bootstrap script and the shared common.sh
 |   |-- k8s/                # the nic-keeper manifest, applied by 03d
 |   `-- talos/              # Image Factory schematics for node types without a custom build
-`-- secrets/                # gitignored: talos certs, talosconfig, kubeconfig (an off-repo store)
+`-- secrets/                # gitignored: Talos PKI, talosconfig, kubeconfig. A symlink to an off-repo store
 ```
 
 ## Getting started
 
-Only ever run on macOS, so Linux or WSL may need tweaks. The scripts assume a bash/zsh shell, GNU `make`, and a
-POSIX-y environment.
+Tested only on macOS. Linux or WSL may need changes.
 
-On your machine: `docker` (with host networking), `git`, `kubectl`, `yq`. No native `talosctl` needed: it runs
-dockerized via `make talosctl`, because the macOS build is unreliable however you install it.
+You need `docker` with host networking, `git`, `kubectl` and `yq`. `talosctl` runs in Docker through
+`make talosctl`, because the macOS build is unreliable.
 
 ```bash
-# 0. Assemble the hardware (docs/01) and flash each Pi's EEPROM boot order (insert microSD into your laptop)
-make build-eeprom-card              # 02 - write the EEPROM boot config to a microSD card (same card for all nodes)
+# 1. Build the EEPROM card, then boot each Pi from it once (docs/runbooks/02_raspi_eeprom.md)
+make build-eeprom-card
 
-# Now insert the SD card into each Pi one-by-one, power on, wait for the LED to flash green rapidly, which means
-# flashing is done, then power off and remove the card.
+# 2. Configure
+cp inventory.example.yaml inventory.yaml   # one entry per node
+cp .env.example .env                       # cluster name, VIP, sizing, GHCR auth
 
-# 1. Configure - versions.env is committed; copy the two templates
-cp inventory.example.yaml inventory.yaml   # then edit: one entry per node (role, hardware type, image)
-cp .env.example .env                       # then edit: cluster name, VIP, sizing, GHCR auth
+# 3. Flash each NVMe over a USB adapter, then boot the nodes into maintenance mode
+make flash-talos-nvme                      # once per drive
+make verify-talos-boot
 
-# 2. Flash the NVMe drives: connect each NVMe to your laptop (e.g. via a USB adapter) and run, per drive:
-make flash-talos-nvme               # 03a - pick a node from the inventory, write its Talos image (repeat per drive)
+# 4. Bring up the cluster: boot check, config, etcd, NIC hardening
+make bootstrap-cluster
 
-# 3. Verify the nodes boot into Talos maintenance mode
-make verify-talos-boot              # 03b - confirm each node boots into maintenance mode
-
-# 4. Bring up the cluster
-make bootstrap-cluster              # preflight + boot-verify + config + etcd + NIC hardening
-
-# 5. Verify
-make check-health                   # Talos cluster health
-make merge-kubeconfig               # merge into ~/.kube/config, make it the active context
-kubectl get nodes                   # all present, all NotReady until a CNI lands
+# 5. Verify and take the kubeconfig
+make check-health
+make merge-kubeconfig                      # merges into ~/.kube/config and makes it the active context
+kubectl get nodes                          # all present, NotReady until a CNI is installed
 ```
 
-`make merge-kubeconfig` is the handover out of this repo: the kubeconfig is the only thing whatever runs on
-the cluster next needs from here. For a one-shell override that leaves `~/.kube/config` alone, use
-`eval "$(make print-kubeconfig)"` instead.
-
-Instead of `make bootstrap-cluster` you can run the steps in runbook order. Every target maps to a script in
-`lib/shell/`; `make help` lists them all. Per-phase reasoning and verification is in [the docs](#documentation).
+Each step, with its checks and failure modes, is in [docs/runbooks/](docs/runbooks/). `make help` lists every
+target, and each target runs one script in `lib/shell/`.
 
 ## Where this repo stops
 
-`make bootstrap-cluster` ends with a configured cluster, etcd bootstrapped, and a `kubeconfig` in `secrets/`.
-**Nodes stay `NotReady` on purpose**: nothing has installed a CNI, and that is the first thing whatever runs
-on the cluster has to do.
+- `make bootstrap-cluster` ends with a configured cluster, etcd bootstrapped, and a `kubeconfig` in `secrets/`.
+- By default the nodes stay `NotReady`. No CNI is installed, and installing one is the first job of whatever runs
+  on the cluster next.
+- `DISABLE_FLANNEL_AND_KUBE_PROXY="false"` in `.env` keeps Talos' built-in Flannel and kube-proxy instead. The
+  cluster then reaches `Ready` alone, with pod and service networking only: no LoadBalancer, no gateway. Decide
+  before bootstrap. Switching later means a rebuild.
+- `make merge-kubeconfig` is the handover. Nothing else in `secrets/` leaves this repo.
+  `eval "$(make print-kubeconfig)"` points one shell at the cluster and leaves `~/.kube/config` alone.
 
-That is the default. `DISABLE_FLANNEL_AND_KUBE_PROXY="false"` in `.env` keeps Talos' built-in Flannel and
-kube-proxy instead, so the cluster reaches `Ready` standalone with no CNI install: pod and service networking
-only, no LoadBalancer, no L2 announcements, no gateway. Pick before bootstrap; switching afterwards is a
-rebuild. See [docs/03](docs/03_operating_system.md#cluster-bring-up).
-
-```bash
-make merge-kubeconfig               # make the cluster your active kubectl context
-```
-
-That context is the whole handover. Nothing else in `secrets/` leaves this repo, and nothing here needs to
-know what gets deployed next.
-
-Two optional hooks in `.env` are where the cluster's own workloads get a say in node lifecycle, because this
-repo cannot know what they are:
+This repo cannot know what the cluster runs. These optional `.env` keys let the workloads take part in node
+lifecycle:
 
 | Key | Used by | If empty |
 |---|---|---|
-| `PRE_DRAIN_HEALTH_HOOK` | `03e`, before draining each node | nothing gates the reboot on replicated-store health |
+| `PRE_DRAIN_HEALTH_HOOK` | `03e`, before draining each node | nothing checks replicated stores before a reboot. `03e` warns |
+| `PRE_DRAIN_EVACUATE_HOOK` | `03e`, once per node after that check | nothing moves off the node before the drain |
+| `FORCE_DELETE_SKIP` | `03e`, when a graceful drain times out | the force-delete kills every pod on the node |
 | `REBALANCE_SKIP_NAMESPACES` | `03g` | every stateless Deployment is restarted |
+| `REBALANCE_PVC_NAMESPACES` | `03g` | a Deployment that mounts a PVC is never restarted |
 
 ## Day-2 operations
 
@@ -158,32 +144,24 @@ repo cannot know what they are:
 | Recover a lost node       | `make recover-node NODE=<host>`                                               |
 | Re-spread stateless pods  | `make rebalance-workloads`                                                    |
 | Reset all nodes           | `make reset-cluster`                                                          |
-| Point kubectl at it       | `make merge-kubeconfig` (persistent), `eval "$(make print-kubeconfig)"` (one shell) |
+| Point kubectl at it       | `make merge-kubeconfig`, or `eval "$(make print-kubeconfig)"` for one shell   |
 | Inspect                   | `make check-health`, `make talosctl <args>`                                   |
 
-A Talos or Kubernetes bump is two steps: merge the Renovate PR that moves the pin in `versions.env`, then run
+A Talos or Kubernetes bump takes two steps. Merge the Renovate PR that moves the pin in `versions.env`, then run
 the upgrade target. Merging alone changes nothing on the nodes.
-
-## Troubleshooting
-
-- **`talosctl` misbehaves on macOS**: use the dockerized `make talosctl <args>`. A native client is not required
-  ([docs/03](docs/03_operating_system.md)).
-- **Nodes are `NotReady` after bring-up**: expected. Nothing here installs a CNI.
-- **Intermittent NIC drops on a Pi 5**: the `macb` wedge. Both halves of the mitigation are applied by 03d,
-  the machine config and the `nic-keeper` DaemonSet ([docs/03](docs/03_operating_system.md)).
-- **A node came back after a reflash and will not rejoin**: its etcd member outlives the disk.
-  `make recover-node NODE=<host>` ([docs/05](docs/05_node_recovery.md)).
 
 ## Documentation
 
-| Doc                                                | Covers                                                                       |
-|----------------------------------------------------|------------------------------------------------------------------------------|
-| [01_hardware](docs/01_hardware.md)                 | Bill of materials + the reasoning behind every part.                         |
-| [02_raspi_eeprom](docs/02_raspi_eeprom.md)         | Flashing a common Pi 5 EEPROM boot config.                                   |
-| [03_operating_system](docs/03_operating_system.md) | Talos: OS choice, where the Pi 5 image comes from, cluster bring-up, NIC hardening. |
-| [04_worker_nodes](docs/04_worker_nodes.md)         | The node inventory, and adding a worker that does not have to be a Pi.       |
-| [05_node_recovery](docs/05_node_recovery.md)       | Losing or replacing a node: etcd, Talos, the machine-level records.          |
-| [06_renovate](docs/06_renovate.md)                 | Automated dependency updates and when Renovate is allowed to self-merge.     |
+Each decision doc has a runbook with the same name in [docs/runbooks/](docs/runbooks/).
+
+| Doc                                                | Covers                                                                          |
+|----------------------------------------------------|---------------------------------------------------------------------------------|
+| [01_hardware](docs/01_hardware.md)                 | The parts and why each was picked.                                              |
+| [02_raspi_eeprom](docs/02_raspi_eeprom.md)         | The Pi 5 EEPROM boot settings.                                                  |
+| [03_operating_system](docs/03_operating_system.md) | Talos, the Pi 5 image, the cluster config, upgrades, NIC hardening.             |
+| [04_worker_nodes](docs/04_worker_nodes.md)         | The node inventory, and a worker that does not have to be a Pi.                 |
+| [05_node_recovery](docs/05_node_recovery.md)       | What a lost or replaced node costs, and what heals by itself.                   |
+| [06_renovate](docs/06_renovate.md)                 | Automated dependency updates, and what merges without review.                   |
 
 Repo-wide conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
