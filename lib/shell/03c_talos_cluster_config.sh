@@ -203,6 +203,17 @@ cluster:
   proxy:
     disabled: ${PROXY_DISABLED}
   apiServer:
+    # The Talos default of 512Mi is a quarter of what the apiserver really uses here. The scheduler then sees free
+    # memory on the Pis that does not exist and packs them until pods get OOM-killed. cpu restates the Talos default.
+    resources:
+      requests:
+        cpu: 200m
+        memory: 2Gi
+    # The live heap is about 0.8 GB, mostly CRD and OpenAPI schemas, and Go lets the heap grow to twice that
+    # before collecting. The soft limit makes it collect earlier. A re-list storm pushes the live heap past 1 GB,
+    # so a much lower limit would keep the collector running nonstop exactly then.
+    env:
+      GOMEMLIMIT: 1500MiB
     # Talos audit-logs at Metadata for EVERYTHING by default, which is ~1GB a day per node, mostly leader-election
     # leases and controller reads. Narrowed to writes of real objects, which is ~1.5% of that and is the part
     # worth keeping: who created, changed or deleted what.
