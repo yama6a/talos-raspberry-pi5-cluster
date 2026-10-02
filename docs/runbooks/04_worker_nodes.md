@@ -42,7 +42,7 @@ The NVMe arrives with Talos already on it, so there is no boot medium to priorit
 ## Change the x86 schematic
 
 A schematic change gives a new schematic id and a new installer ref. `talosctl upgrade` installs an image but
-never rewrites the stored `machine.install.image`, so reapply first:
+never rewrites the stored installer image (`UnattendedInstallConfig`), so reapply first:
 
 ```bash
 make reapply-talos-config NODE=<x86-host>
