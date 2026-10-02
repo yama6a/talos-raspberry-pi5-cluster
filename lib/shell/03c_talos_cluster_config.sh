@@ -285,10 +285,6 @@ filesystem:
   type: xfs
 EOF
   cp "${TALOS_SCRATCH}/controlplane.yaml" "${TALOS_SCRATCH}/cp.yaml"
-  cat "${TALOS_SCRATCH}/volumes.yaml" >> "${TALOS_SCRATCH}/cp.yaml"
-  if [ "${#WORKER_HOSTS[@]}" -gt 0 ]; then
-    cat "${TALOS_SCRATCH}/volumes.yaml" >> "${TALOS_SCRATCH}/worker.yaml"
-  fi
 }
 
 # Only a maintenance node answers --insecure. After a reset the nodes reboot at their own pace, so this waits
@@ -344,7 +340,7 @@ report_hardware() {
 apply_to() {
   local host="$1"
   shift
-  local ip="${NODE_IP[$host]}" base rpatch npatch
+  local ip="${NODE_IP[$host]}" base rpatch vpatch npatch
   case "${NODE_ROLE[$host]}" in
     controlplane)
       base="/scratch/cp.yaml"
@@ -355,10 +351,12 @@ apply_to() {
       rpatch="/scratch/worker-patch.yaml"
       ;;
   esac
+  vpatch="/scratch/volumes.yaml"
   npatch="$(printf '{"machine":{"install":{"image":"%s","disk":"%s"},"nodeLabels":{"node.kubernetes.io/instance-type":"%s"}}}' \
     "$(installer_ref_for "$host")" "${NODE_INSTALL_DISK[$host]}" "${NODE_TYPE[$host]}")"
   talosctl apply-config -e "${ip}" -n "${ip}" -f "$base" \
     -p @"$rpatch" \
+    -p @"$vpatch" \
     -p "$npatch" \
     -p '{"apiVersion":"v1alpha1","kind":"HostnameConfig","hostname":"'"${host}"'","auto":"off"}' \
     "$@"
