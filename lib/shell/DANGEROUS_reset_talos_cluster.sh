@@ -7,9 +7,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 
 # ---- knobs ----
-# Each label must match a volume the machine config still declares, or the whole reset fails. For a dropped
-# volume use `talosctl wipe disk <part> --drop-partition`. BOOT, EFI and META stay, so no reflash is needed.
-WIPE_LABELS="STATE,EPHEMERAL,u-storage"
 RESET_TIMEOUT="10m" # per node. talosctl's default retries silently for 30m
 MAINT_WAIT=300      # secs for a reset worker to answer the maintenance API again
 
