@@ -36,6 +36,7 @@ REAPPLY=false # set by parse_args
 JOIN_ONE=""
 TARGETS=()
 REGISTRIES_BLOCK="" # set by build_registries_block
+PROXY_ENABLED=true # set by parse_args, the inverse of PROXY_DISABLED
 
 # ---- functions ----
 
@@ -59,6 +60,7 @@ parse_args() {
         ;;
     esac
   done
+  if [ "${PROXY_DISABLED}" = true ]; then PROXY_ENABLED=false; fi
   if [ -n "$JOIN_ONE" ]; then
     [ -n "${NODE_ROLE[$JOIN_ONE]:-}" ] || die "unknown node '${JOIN_ONE}': inventory.yaml has ${ALL_HOSTS[*]}"
     TARGETS=("$JOIN_ONE")
@@ -83,6 +85,7 @@ print_plan() {
 
 # Every node authenticates every ghcr.io pull, so no namespace needs imagePullSecrets. GitHub Packages accepts
 # only a classic token. It lands in the render scratch dir and the machine config, never in git.
+# A RegistryAuthConfig document, appended to both role patches.
 build_registries_block() {
   echo
   if [ -z "${GITHUB_GHCR_PULL_TOKEN_SECRET}" ]; then
@@ -91,12 +94,12 @@ build_registries_block() {
   fi
   REGISTRIES_BLOCK="$(
     cat << EOF
-  registries:
-    config:
-      ${GHCR_SERVER}:
-        auth:
-          username: ${GHCR_USER}
-          password: ${GITHUB_GHCR_PULL_TOKEN_SECRET}
+---
+apiVersion: v1alpha1
+kind: RegistryAuthConfig
+name: ${GHCR_SERVER}
+username: ${GHCR_USER}
+password: ${GITHUB_GHCR_PULL_TOKEN_SECRET}
 EOF
   )"
   echo "   ${GHCR_SERVER} auth from GITHUB_GHCR_PULL_TOKEN_SECRET goes into every node's machine config."
@@ -117,6 +120,11 @@ ensure_secrets_bundle() {
 
 # Rendered fresh each run from secrets.yaml and the current versions.env and .env, so a version bump reaches
 # the nodes. No --install-image or --install-disk: both follow the node, so apply_to patches them per node.
+# Since Talos 1.12 the output is multi-document: next to the v1alpha1 document come typed ones (VolumeConfig
+# EPHEMERAL, KubeletConfig, KubeNodeConfig, KubeAPIServerConfig, ...). Never append to these files: a second
+# document of the same kind and name is rejected. Every change below goes through talosctl's strategic merge
+# patch (-p), which matches documents by apiVersion, kind and name, merges into one that exists, adds one that
+# does not, and removes one marked `$patch: delete`.
 render_base_configs() {
   talosctl gen config "${CLUSTER}" "https://${VIP}:6443" \
     --with-secrets secrets.yaml \
@@ -143,15 +151,17 @@ set_talosconfig_endpoints() {
   talosctl config node "${CP_IPS[0]}"
 }
 
-# certSANs name the VIP and the control-plane IPs only. A worker serves no apiserver.
-write_control_plane_patch() {
-  local certsans
-  certsans="$(printf '      - %s\n' "${VIP}" "${CP_IPS[@]}")"
-  cat > "${TALOS_SCRATCH}/cp-patch.yaml" << EOF
-machine:
-${REGISTRIES_BLOCK}
+# Talos refuses a v1alpha1 field that a typed document also covers, so each setting goes where 1.14 wants it:
+# the typed document when gen config emits one, the v1alpha1 document for what has none (etcd, the VIP).
+# The kubelet is the exception: KubeletConfig has no extraMounts, so its document is deleted and the kubelet
+# stays in .machine.kubelet. Image and seccomp default are restated there, since gen config set them only in
+# the deleted document.
+kubelet_block() {
+  cat << EOF
   kubelet:
-    # The kubelet runs in a container that does not see /var/mnt, so a CSI driver needs this bind.
+    image: ghcr.io/siderolabs/kubelet:v${KVER}
+    defaultRuntimeSeccompProfileEnabled: true
+    # The kubelet runs in a container that sees /var/mnt read-only, so a CSI driver needs this bind.
     # rshared makes the driver's per-volume mounts visible on the host too.
     extraMounts:
       - destination: /var/mnt/storage
@@ -162,10 +172,21 @@ ${REGISTRIES_BLOCK}
     # kubelet start, not from the pull.
     extraConfig:
       imageMaximumGCAge: 168h
-  features:
-    kubePrism:
-      enabled: true
-      port: 7445
+EOF
+}
+
+# certSANs name the VIP and the control-plane IPs only. A worker serves no apiserver.
+write_control_plane_patch() {
+  local certsans cni_doc=""
+  certsans="$(printf '  - %s\n' "${VIP}" "${CP_IPS[@]}")"
+  # From DISABLE_FLANNEL_AND_KUBE_PROXY: none leaves the CNI to you, flannel keeps Talos' own. Flannel is on
+  # while its document exists.
+  if [ "${CNI_NAME}" = none ]; then
+    cni_doc="$(printf '%s\n' '---' 'apiVersion: v1alpha1' 'kind: KubeFlannelCNIConfig' '$patch: delete')"
+  fi
+  cat > "${TALOS_SCRATCH}/cp-patch.yaml" << EOF
+machine:
+$(kubelet_block)
   network:
     interfaces:
       - interface: ${IFACE}
@@ -173,68 +194,91 @@ ${REGISTRIES_BLOCK}
         vip:
           ip: ${VIP}
 cluster:
-  allowSchedulingOnControlPlanes: true
   # At the defaults, a cold boot saturates the one NVMe, etcd fsyncs stall past a second, and followers call
   # needless elections that lag every watch. Raised 5x, election still 10x heartbeat.
   etcd:
     extraArgs:
       heartbeat-interval: "500"    # ms (etcd default 100)
       election-timeout: "5000"     # ms (etcd default 1000)
-  # From DISABLE_FLANNEL_AND_KUBE_PROXY: none leaves the CNI and kube-proxy to you, flannel keeps Talos' own.
-  network:
-    cni:
-      name: ${CNI_NAME}
-  proxy:
-    disabled: ${PROXY_DISABLED}
-  # Memory runs out first on the 8 GB Pis. Weighting free memory 3:1 sends pods to the node with room, instead
-  # of a near-tie decided by CPU requests.
-  scheduler:
-    config:
-      apiVersion: kubescheduler.config.k8s.io/v1
-      kind: KubeSchedulerConfiguration
-      profiles:
-        - schedulerName: default-scheduler
-          pluginConfig:
-            - name: NodeResourcesFit
-              args:
-                scoringStrategy:
-                  type: LeastAllocated
-                  resources:
-                    - {name: cpu, weight: 1}
-                    - {name: memory, weight: 3}
-  apiServer:
-    # The Talos default request is far below real use, so the scheduler overpacks the Pis until pods get
-    # OOM-killed. cpu is the Talos default.
-    resources:
-      requests:
-        cpu: 200m
-        memory: 2Gi
-    # Go lets the heap reach twice the live size before it collects. This soft limit collects earlier.
-    # Much lower, and a re-list storm would keep the collector running nonstop.
-    env:
-      GOMEMLIMIT: 1500MiB
-    # Talos audits every request by default, mostly leases and controller reads. These rules keep writes to
-    # real objects: who created, changed or deleted what.
-    auditPolicy:
-      apiVersion: audit.k8s.io/v1
-      kind: Policy
-      omitStages: [RequestReceived] # one event per request instead of two
-      rules:
-        - level: None
-          verbs: [get, list, watch] # most of the volume, and nobody reviews them
-        - level: None
-          resources:
-            - group: coordination.k8s.io
-              resources: [leases] # leader election and kubelet heartbeats
-        - level: None
-          resources:
-            - group: ""
-              resources: [events, nodes/status, pods/status] # controller status churn, already in metrics
-            - group: events.k8s.io
-              resources: [events]
-        - level: Metadata # never Request or RequestResponse: those log Secret and ConfigMap contents
-    certSANs:
+---
+apiVersion: v1alpha1
+kind: KubeletConfig
+\$patch: delete
+---
+# Workloads schedule on the control plane: drop the taint gen config puts there.
+apiVersion: v1alpha1
+kind: KubeNodeConfig
+taints:
+  node-role.kubernetes.io/control-plane:
+    \$patch: delete
+---
+# A KubePrismConfig document is what enables KubePrism.
+apiVersion: v1alpha1
+kind: KubePrismConfig
+port: 7445
+---
+# From DISABLE_FLANNEL_AND_KUBE_PROXY: false leaves kube-proxy to you.
+apiVersion: v1alpha1
+kind: KubeProxyConfig
+enabled: ${PROXY_ENABLED}
+${cni_doc}
+---
+# Memory runs out first on the 8 GB Pis. Weighting free memory 3:1 sends pods to the node with room, instead
+# of a near-tie decided by CPU requests.
+apiVersion: v1alpha1
+kind: KubeSchedulerConfig
+config:
+  apiVersion: kubescheduler.config.k8s.io/v1
+  kind: KubeSchedulerConfiguration
+  profiles:
+    - schedulerName: default-scheduler
+      pluginConfig:
+        - name: NodeResourcesFit
+          args:
+            scoringStrategy:
+              type: LeastAllocated
+              resources:
+                - {name: cpu, weight: 1}
+                - {name: memory, weight: 3}
+---
+apiVersion: v1alpha1
+kind: KubeAPIServerConfig
+# The Talos default request is far below real use, so the scheduler overpacks the Pis until pods get
+# OOM-killed. cpu is the Talos default.
+resources:
+  requests:
+    cpu: 200m
+    memory: 2Gi
+# Go lets the heap reach twice the live size before it collects. This soft limit collects earlier.
+# Much lower, and a re-list storm would keep the collector running nonstop.
+env:
+  GOMEMLIMIT: 1500MiB
+certExtraSANs:
 ${certsans}
+---
+# Talos audits every request by default, mostly leases and controller reads. These rules keep writes to
+# real objects: who created, changed or deleted what. The configuration replaces the generated one whole.
+apiVersion: v1alpha1
+kind: KubeAuditPolicyConfig
+configuration:
+  apiVersion: audit.k8s.io/v1
+  kind: Policy
+  omitStages: [RequestReceived] # one event per request instead of two
+  rules:
+    - level: None
+      verbs: [get, list, watch] # most of the volume, and nobody reviews them
+    - level: None
+      resources:
+        - group: coordination.k8s.io
+          resources: [leases] # leader election and kubelet heartbeats
+    - level: None
+      resources:
+        - group: ""
+          resources: [events, nodes/status, pods/status] # controller status churn, already in metrics
+        - group: events.k8s.io
+          resources: [events]
+    - level: Metadata # never Request or RequestResponse: those log Secret and ConfigMap contents
+${REGISTRIES_BLOCK}
 EOF
 }
 
@@ -244,25 +288,22 @@ write_worker_patch() {
   [ "${#WORKER_HOSTS[@]}" -gt 0 ] || return 0
   cat > "${TALOS_SCRATCH}/worker-patch.yaml" << EOF
 machine:
+$(kubelet_block)
+---
+apiVersion: v1alpha1
+kind: KubeletConfig
+\$patch: delete
+---
+apiVersion: v1alpha1
+kind: KubePrismConfig
+port: 7445
 ${REGISTRIES_BLOCK}
-  kubelet:
-    # Same bind as the control plane. A storage layer runs on every node with a disk.
-    extraMounts:
-      - destination: /var/mnt/storage
-        type: bind
-        source: /var/mnt/storage
-        options: [bind, rshared, rw]
-    extraConfig:
-      imageMaximumGCAge: 168h
-  features:
-    kubePrism:
-      enabled: true
-      port: 7445
 EOF
 }
 
 # Talos provisions each volume once, so renaming one on a live cluster orphans the old partition.
 # system_disk follows installDisk. Matching on transport would miss a SATA node or pick the wrong NVMe.
+# A patch, not appended: gen config already emits an EPHEMERAL VolumeConfig, and this merges into it.
 write_volume_config() {
   cat > "${TALOS_SCRATCH}/volumes.yaml" << EOF
 ---
@@ -284,11 +325,6 @@ provisioning:
 filesystem:
   type: xfs
 EOF
-  cp "${TALOS_SCRATCH}/controlplane.yaml" "${TALOS_SCRATCH}/cp.yaml"
-  cat "${TALOS_SCRATCH}/volumes.yaml" >> "${TALOS_SCRATCH}/cp.yaml"
-  if [ "${#WORKER_HOSTS[@]}" -gt 0 ]; then
-    cat "${TALOS_SCRATCH}/volumes.yaml" >> "${TALOS_SCRATCH}/worker.yaml"
-  fi
 }
 
 # Only a maintenance node answers --insecure. After a reset the nodes reboot at their own pace, so this waits
@@ -340,14 +376,17 @@ report_hardware() {
 
 # The hostname goes in a HostnameConfig document (needs Talos >= 1.12). gen config already ships one, and also
 # setting machine.network.hostname fails with "static hostname is already set".
+# Install image and disk go in the generated UnattendedInstallConfig, the instance-type label in KubeNodeConfig,
+# whose labels merge with the generated ones. Their v1alpha1 twins (.machine.install, .machine.nodeLabels) are
+# rejected next to those documents.
 # -e is required on the secure path: gen config --force left talosconfig with no endpoints.
 apply_to() {
   local host="$1"
   shift
-  local ip="${NODE_IP[$host]}" base rpatch npatch
+  local ip="${NODE_IP[$host]}" base rpatch ipatch lpatch
   case "${NODE_ROLE[$host]}" in
     controlplane)
-      base="/scratch/cp.yaml"
+      base="/scratch/controlplane.yaml"
       rpatch="/scratch/cp-patch.yaml"
       ;;
     worker)
@@ -355,11 +394,15 @@ apply_to() {
       rpatch="/scratch/worker-patch.yaml"
       ;;
   esac
-  npatch="$(printf '{"machine":{"install":{"image":"%s","disk":"%s"},"nodeLabels":{"node.kubernetes.io/instance-type":"%s"}}}' \
-    "$(installer_ref_for "$host")" "${NODE_INSTALL_DISK[$host]}" "${NODE_TYPE[$host]}")"
+  ipatch="$(printf '{"apiVersion":"v1alpha1","kind":"UnattendedInstallConfig","installer":{"image":"%s"},"provisioning":{"diskSelector":{"match":"disk.dev_path == \\"%s\\""}}}' \
+    "$(installer_ref_for "$host")" "${NODE_INSTALL_DISK[$host]}")"
+  lpatch="$(printf '{"apiVersion":"v1alpha1","kind":"KubeNodeConfig","labels":{"node.kubernetes.io/instance-type":"%s"}}' \
+    "${NODE_TYPE[$host]}")"
   talosctl apply-config -e "${ip}" -n "${ip}" -f "$base" \
     -p @"$rpatch" \
-    -p "$npatch" \
+    -p @/scratch/volumes.yaml \
+    -p "$ipatch" \
+    -p "$lpatch" \
     -p '{"apiVersion":"v1alpha1","kind":"HostnameConfig","hostname":"'"${host}"'","auto":"off"}' \
     "$@"
 }
