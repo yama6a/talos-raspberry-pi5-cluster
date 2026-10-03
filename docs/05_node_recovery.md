@@ -49,6 +49,15 @@ On a 3-node cluster, running on 2 costs this:
 
 Two nodes is not a supported steady state. Treat it as a countdown, not a configuration.
 
+`make remove-node` takes a running node out:
+
+- **Data moves before the wipe.** The storage hook returns only when the node holds no copies. Every volume keeps
+  its full replica count, and the reset destroys nothing the cluster still needs. Rebuilding after the wipe
+  instead leaves each affected volume on one copy for the rebuild time.
+- **A graceful reset.** Talos makes a control-plane node leave etcd and hand off the VIP before it wipes.
+- **etcd needs 2 members after the removal.** The script refuses below that and asks for a typed `TWO` at
+  exactly 2.
+
 ## What heals by itself
 
 | Layer | After a machine loss | After a machine replacement |

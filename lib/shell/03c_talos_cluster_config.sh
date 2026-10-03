@@ -36,7 +36,7 @@ REAPPLY=false # set by parse_args
 JOIN_ONE=""
 TARGETS=()
 REGISTRIES_BLOCK="" # set by build_registries_block
-PROXY_ENABLED=true # set by parse_args, the inverse of PROXY_DISABLED
+PROXY_ENABLED=true  # set by parse_args, the inverse of PROXY_DISABLED
 
 # ---- functions ----
 
