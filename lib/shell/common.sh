@@ -31,6 +31,8 @@ source "$ENV_FILE"
 : "${DISABLE_FLANNEL_AND_KUBE_PROXY:=true}" # unset means no CNI and no kube-proxy, for a cluster that installs its own
 : "${PRE_DRAIN_HEALTH_HOOK:=}"
 : "${PRE_DRAIN_EVACUATE_HOOK:=}"
+: "${PRE_REMOVE_STORAGE_HOOK:=}"
+: "${POST_REMOVE_STORAGE_HOOK:=}"
 : "${FORCE_DELETE_SKIP:=}"
 : "${REBALANCE_SKIP_NAMESPACES:=}"
 : "${REBALANCE_PVC_NAMESPACES:=}"

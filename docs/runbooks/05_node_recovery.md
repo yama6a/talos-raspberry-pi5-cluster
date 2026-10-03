@@ -80,7 +80,31 @@ Address nodes by IP. Never run `talosctl bootstrap`: that creates a new cluster.
    kubectl delete pods -A --field-selector=status.phase=Failed
    ```
 
-## Retire a node for good
+## Remove a running node
+
+1. Remove it. The script waits until the storage layer has moved every copy off the node, then drains and
+   resets it. Safe to re-run:
+
+   ```bash
+   make remove-node NODE=talos-cp3
+   ```
+
+   Expected: the node is in maintenance mode, and `kubectl get nodes` no longer lists it.
+
+2. Edit its entry in `inventory.yaml`. Delete it to retire the machine. To reuse the machine, change `host` and
+   `role`, then join it:
+
+   ```bash
+   make add-node NODE=talos-w4
+   ```
+
+3. For a control-plane node, drop its IP from the apiserver certificate:
+
+   ```bash
+   make reapply-talos-config
+   ```
+
+## Retire a dead node
 
 1. Remove it from etcd and Kubernetes:
 

@@ -62,6 +62,11 @@ recover-node: ## 05: rejoin one wiped or replaced node and fix what does not hea
 	@test -n "$(NODE)" || { echo "usage: make recover-node NODE=talos-cp3 [YES=1]"; exit 1; }
 	bash lib/shell/recover_node.sh $(NODE) $(if $(YES),--yes,)
 
+.PHONY: remove-node
+remove-node: ## 05: take one node out for good: move its data off, drain, leave etcd, reset to maintenance mode. NODE=<hostname>.
+	@test -n "$(NODE)" || { echo "usage: make remove-node NODE=talos-cp3"; exit 1; }
+	bash lib/shell/remove_node.sh $(NODE)
+
 ##@ Kubeconfig  (point kubectl at the cluster. merge-kubeconfig is the handover out of this repo)
 .PHONY: merge-kubeconfig
 merge-kubeconfig: ## Merge the 03c kubeconfig into ~/.kube/config and make it the active context. Backs up the old file first.

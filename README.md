@@ -127,9 +127,11 @@ lifecycle:
 
 | Key | Used by | If empty |
 |---|---|---|
-| `PRE_DRAIN_HEALTH_HOOK` | `03e`, before draining each node | nothing checks replicated stores before a reboot. `03e` warns |
-| `PRE_DRAIN_EVACUATE_HOOK` | `03e`, once per node after that check | nothing moves off the node before the drain |
-| `FORCE_DELETE_SKIP` | `03e`, when a graceful drain times out | the force-delete kills every pod on the node |
+| `PRE_DRAIN_HEALTH_HOOK` | `03e` and `remove-node`, before draining | nothing checks replicated stores before a reboot. `03e` warns |
+| `PRE_DRAIN_EVACUATE_HOOK` | `03e` and `remove-node`, once per node after that check | nothing moves off the node before the drain |
+| `FORCE_DELETE_SKIP` | `03e` and `remove-node`, when a graceful drain times out | the force-delete kills every pod on the node |
+| `PRE_REMOVE_STORAGE_HOOK` | `remove-node`, once before the drain | nothing moves storage data off, and the reset wipes it |
+| `POST_REMOVE_STORAGE_HOOK` | `remove-node`, after the Kubernetes node is deleted | the storage layer keeps its record of the node |
 | `REBALANCE_SKIP_NAMESPACES` | `03g` | every stateless Deployment is restarted |
 | `REBALANCE_PVC_NAMESPACES` | `03g` | a Deployment that mounts a PVC is never restarted |
 
@@ -142,6 +144,7 @@ lifecycle:
 | Change machine config     | `make reapply-talos-config [NODE=<host>]`                                     |
 | Add a node                | `make add-node NODE=<host>`                                                   |
 | Recover a lost node       | `make recover-node NODE=<host>`                                               |
+| Remove a node             | `make remove-node NODE=<host>`                                                |
 | Re-spread stateless pods  | `make rebalance-workloads`                                                    |
 | Reset all nodes           | `make reset-cluster`                                                          |
 | Point kubectl at it       | `make merge-kubeconfig`, or `eval "$(make print-kubeconfig)"` for one shell   |
