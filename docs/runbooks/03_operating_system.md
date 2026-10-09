@@ -16,13 +16,14 @@ Runs on macOS. Repeat for each drive.
 
    The script downloads the image once per release, checks its sha256, and asks for the disk id.
 3. Enter the whole-disk id, for example `/dev/disk6`, not a partition. Type `YES` to erase it.
-4. Slot the drive into its Pi and power on with no SD card. Talos boots into maintenance mode.
+4. Slot the drive into its node and power on. A Pi needs no SD card in the slot. Talos boots into maintenance
+   mode.
 
 The pick selects the image, not the drive, so one run covers every drive of the same hardware type.
 
 ## Reserve the IPs
 
-1. Boot each Pi once and read its MAC address from the router's client list.
+1. Boot each node once and read its MAC address from the router's client list.
 2. Reserve one IP per node in the router. Put the same IPs in `inventory.yaml`. Example:
 
    | Node | IP |
@@ -80,7 +81,7 @@ Gotchas:
 make check-health
 make merge-kubeconfig
 kubectl get nodes -o wide                                # all present, NotReady until a CNI is installed
-make talosctl -- -n <cp1-ip> etcd members                # 3 members
+make talosctl -- -n <cp1-ip> etcd members                # one member per control-plane node
 ```
 
 ## Harden the NICs
@@ -103,8 +104,8 @@ Expected: `[PASS]` per check, then `summary: N passed, 0 failed`.
 Check `nic-keeper`:
 
 ```bash
-kubectl get ds -n kube-system nic-keeper                          # DESIRED = CURRENT = READY = 3
-kubectl logs -n kube-system -l app.kubernetes.io/name=nic-keeper  # one pod per node, event=eee-off ok
+kubectl get ds -n kube-system nic-keeper                          # DESIRED = CURRENT = READY = number of Pis
+kubectl logs -n kube-system -l app.kubernetes.io/name=nic-keeper  # one pod per Pi, event=eee-off ok
 kubectl get nodes -L node.kubernetes.io/instance-type             # every Pi shows rpi5
 ```
 
