@@ -11,7 +11,7 @@
   <img src="docs/images/rackmount_0.jpeg" alt="The Raspberry Pi 5 nodes in a 10-inch rack" width="600">
 </p>
 
-- Hardware, OS and cluster bring-up: flash the NVMe drives, configure Talos, bootstrap etcd, hand over a
+- Hardware, OS and cluster bring-up: flash the SSDs, configure Talos, bootstrap etcd, hand over a
   `kubeconfig`.
 - It stops there. Nothing that runs on the cluster lives here.
 - The node image is built in [talos-raspberry-pi5](https://github.com/yama6a/talos-raspberry-pi5). This repo
@@ -34,9 +34,10 @@
 - Seven nodes: four Raspberry Pi 5 boards (arm64) and three Lenovo ThinkCentre M720q Tiny PCs (amd64).
 - Three nodes are control-plane: two Pis and one ThinkCentre. etcd runs on those three. The other four are
   workers. Workloads schedule on all seven.
-- Every node boots Talos from NVMe. Talos ships no Pi 5 image, so the Pis run a release of
-  [talos-raspberry-pi5](https://github.com/yama6a/talos-raspberry-pi5). It has a Raspberry Pi kernel with 4K
-  pages, plus the extensions the cluster needs. The ThinkCentres run a stock Image Factory image.
+- The Pis boot Talos from NVMe, the ThinkCentres from 2.5-inch SATA SSDs. Talos ships no Pi 5 image, so the
+  Pis run a release of [talos-raspberry-pi5](https://github.com/yama6a/talos-raspberry-pi5). It has a Raspberry
+  Pi kernel with 4K pages, plus the extensions the cluster needs. The ThinkCentres run a stock Image Factory
+  image.
 - Each node in `inventory.yaml` names its role and hardware type, and the scripts pick its image from that.
 - One Kubernetes object is applied from here: the `nic-keeper` DaemonSet. It is the runtime half of the Pi 5 NIC
   fix, and `03d` applies it.
@@ -52,16 +53,16 @@ Config lives in three files. No script hardcodes a value.
 ## Hardware
 
 Four Raspberry Pi 5 boards fill all four bays of a 10-inch 2U rack. Three ThinkCentre M720q Tiny PCs complete
-the cluster. Every node boots from NVMe. Parts and reasons are in [docs/01_hardware.md](docs/01_hardware.md).
+the cluster. Parts and reasons are in [docs/01_hardware.md](docs/01_hardware.md).
 
-| Node     | Hardware                                          | Role          |
-|----------|---------------------------------------------------|---------------|
-| pi1, pi2 | Raspberry Pi 5, 8 GB, Crucial P310 1 TB           | control-plane |
-| pi3      | Raspberry Pi 5, 8 GB, Crucial P310 1 TB           | worker        |
-| pi4      | Raspberry Pi 5, 4 GB, 256 GB NVMe                 | worker        |
-| tc1      | ThinkCentre M720q, Core i5 8th gen, 16 GB, 1 TB   | worker        |
-| tc2      | ThinkCentre M720q, Core i5 8th gen, 16 GB, 256 GB | worker        |
-| tc3      | ThinkCentre M720q, Core i5 8th gen, 16 GB, 256 GB | control-plane |
+| Node     | Hardware                                                   | Role          |
+|----------|------------------------------------------------------------|---------------|
+| pi1, pi2 | Raspberry Pi 5, 8 GB, Crucial P310 1 TB                    | control-plane |
+| pi3      | Raspberry Pi 5, 8 GB, Crucial P310 1 TB                    | worker        |
+| pi4      | Raspberry Pi 5, 4 GB, 256 GB NVMe                          | worker        |
+| tc1      | ThinkCentre M720q, Core i5 8th gen, 16 GB, 1 TB SATA SSD   | worker        |
+| tc2      | ThinkCentre M720q, Core i5 8th gen, 16 GB, 256 GB SATA SSD | worker        |
+| tc3      | ThinkCentre M720q, Core i5 8th gen, 16 GB, 256 GB SATA SSD | control-plane |
 
 | Pi part      | Choice                                       | Qty |
 |--------------|----------------------------------------------|-----|
@@ -102,7 +103,7 @@ make build-eeprom-card
 cp inventory.example.yaml inventory.yaml   # one entry per node
 cp .env.example .env                       # cluster name, VIP, sizing, GHCR auth
 
-# 3. Flash each NVMe over a USB adapter, then boot the nodes into maintenance mode
+# 3. Flash each SSD over a USB adapter, then boot the nodes into maintenance mode
 make flash-talos-nvme                      # once per drive
 make verify-talos-boot
 

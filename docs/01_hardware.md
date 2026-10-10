@@ -1,9 +1,11 @@
 # Hardware
 
-Seven nodes, all booting from NVMe:
+Seven nodes:
 
-- Four Raspberry Pi 5 boards in a 10-inch 2U rack. pi1 and pi2 are control-plane, pi3 and pi4 are workers.
-- Three Lenovo ThinkCentre M720q Tiny PCs. tc3 is control-plane, tc1 and tc2 are workers.
+- Four Raspberry Pi 5 boards in a 10-inch 2U rack, booting from NVMe. pi1 and pi2 are control-plane, pi3 and
+  pi4 are workers.
+- Three Lenovo ThinkCentre M720q Tiny PCs, booting from 2.5-inch SATA SSDs. tc3 is control-plane, tc1 and tc2
+  are workers.
 
 ## Bill of materials
 
@@ -41,21 +43,21 @@ Seven nodes, all booting from NVMe:
 | CPU | Core i5 8th gen, 6 cores, 35W T-series |
 | iGPU | Intel UHD 630 (Gen9.5) |
 | Memory | 2 DDR4 SO-DIMM slots, 32GB max |
-| Storage | 1 M.2 2280 NVMe slot, PCIe 3.0 x4 |
+| Boot drive | 2.5-inch SATA SSD in the drive bay, SATA III (6 Gb/s) |
 | Network | 1 GbE |
 | Power | external Lenovo adapter, one per box |
 
 | Node | RAM | SSD | Role |
 |---|---|---|---|
-| tc1 | 16GB | 1TB NVMe | worker |
-| tc2 | 16GB | 256GB NVMe | worker |
-| tc3 | 16GB | 256GB NVMe | control-plane |
+| tc1 | 16GB | 1TB SATA | worker |
+| tc2 | 16GB | 256GB SATA | worker |
+| tc3 | 16GB | 256GB SATA | control-plane |
 
 - amd64, so they run a stock Talos image from the Image Factory, not the Pi build.
 - The UHD 630 iGPU does hardware video transcoding. The x86 schematic adds its driver. See
   [04_worker_nodes.md](04_worker_nodes.md#the-x86-schematic).
 - Each has 1.5x the cores and 2x the memory of an 8GB Pi, so the scheduler gives it a bigger share of pods.
-- The NVMe link is PCIe 3.0 x4, about 8x the bandwidth of the single Gen2 lane on a Pi.
+- SATA III tops out at about 550 MB/s, close to the 450 MB/s of the single Gen2 lane on a Pi.
 - No 5V budget to plan, as on a Pi. The adapter powers the whole box.
 
 ## Rack mount: GeeekPi DP-0046 (10" 2U)

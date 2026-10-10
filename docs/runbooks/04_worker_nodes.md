@@ -31,10 +31,10 @@ Before the first node of a new architecture joins, check that every running imag
 
 ## Set up the x86 BIOS
 
-The NVMe arrives with Talos already on it, so there is no boot medium to prioritise.
+The SSD arrives with Talos already on it, so there is no boot medium to prioritise.
 
 1. Apply the factory defaults and exit.
-2. Boot order: the M.2 NVMe first, in UEFI mode. Turn off Fast Boot.
+2. Boot order: the SATA SSD first, in UEFI mode. Turn off Fast Boot.
 3. Secure Boot: off. Stock Talos images are not signed with a key OEM firmware trusts.
 4. After power loss: On. A headless node must come back by itself.
 5. Leave the TPM on. It does nothing unless you turn on disk encryption.

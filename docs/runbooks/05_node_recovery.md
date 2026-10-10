@@ -6,7 +6,7 @@ The reasons behind these steps are in [05_node_recovery.md](../05_node_recovery.
 ## Replace a node
 
 ```bash
-make flash-talos-nvme                # only if the NVMe is new. Pick the node, then boot it with no SD card
+make flash-talos-nvme                # only if the drive is new. Pick the node, then boot it with no SD card
 make recover-node NODE=talos-cp3     # steps 3, 5 and 7 below. Safe to re-run
 make rebalance-workloads             # once everything is healthy
 ```

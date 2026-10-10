@@ -3,11 +3,12 @@
 Flash, boot, bring up, harden and upgrade the Talos cluster. The reasons behind each step are in
 [03_operating_system.md](../03_operating_system.md). `make help` lists every target.
 
-## Flash the NVMe drives
+## Flash the drives
 
 Runs on macOS. Repeat for each drive.
 
-1. Connect the NVMe to your laptop through a USB adapter.
+1. Connect the drive to your laptop through a USB adapter. A Pi takes an M.2 NVMe, a ThinkCentre a 2.5-inch
+   SATA SSD.
 2. Write the image:
 
    ```bash

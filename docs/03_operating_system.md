@@ -86,7 +86,7 @@ are comments in `lib/shell/03c_talos_cluster_config.sh`. The decisions that shap
   fixed at bootstrap.
 - **The VIP floats between control-plane nodes.** Talos claims it over ARP, so it must sit outside the DHCP pool
   and cannot be reserved to a MAC. `03c` binds it to `end0`, the Pi NIC.
-- **etcd timeouts are 5x the defaults.** etcd shares one NVMe with storage and databases. During a cold boot its
+- **etcd timeouts are 5x the defaults.** etcd shares one disk with storage and databases. During a cold boot its
   fsyncs stall past the default election window and trigger a burst of leader elections. The cost is about 5s
   instead of 1s failover when a leader really is gone.
 - **EPHEMERAL is capped, and a `storage` volume takes the rest of the disk.** Talos provisions each volume once.
