@@ -49,7 +49,7 @@ hardware: tc3 gets the control-plane config, pi3 gets the worker config.
 | `apiServer.certSANs` | the VIP plus every control-plane IP | n/a |
 | etcd timeouts, `allowSchedulingOnControlPlanes` | yes | n/a |
 | `cluster.network.cni`, `cluster.proxy` | yes | n/a, a worker reads neither |
-| kubelet mounts, image GC age, KubePrism, volumes | same | same |
+| kubelet mounts, image GC thresholds and age, KubePrism, volumes | same | same |
 
 - **No interfaces block on a worker.** x86 NIC names depend on the firmware (`eno1`, `enp0s31f6`), and a wrong
   guess is a node with no network. Talos runs DHCP on every link by default, and a worker carries no VIP.
