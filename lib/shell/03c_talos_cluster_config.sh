@@ -168,9 +168,12 @@ kubelet_block() {
         type: bind
         source: /var/mnt/storage
         options: [bind, rshared, rw]
-    # The default GC starts only at 85% of EPHEMERAL. This removes an image unused for a week, counted from
-    # kubelet start, not from the pull.
+    # The default GC starts at 85% of EPHEMERAL, the same point as the default imagefs eviction (15% free).
+    # GC at 75% frees space before the kubelet evicts pods. imageMaximumGCAge removes an image unused for a
+    # week, counted from kubelet start, not from the pull.
     extraConfig:
+      imageGCHighThresholdPercent: 75    # % of EPHEMERAL used that starts image GC
+      imageGCLowThresholdPercent: 70     # % of EPHEMERAL used where image GC stops
       imageMaximumGCAge: 168h
 EOF
 }
