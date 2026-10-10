@@ -130,7 +130,7 @@ A blower-style cooler with an aluminium heatsink and a PWM fan, one per board. T
 ## Assembled
 
 <img src="images/assembled_blade.jpg" alt="Assembled Pi 5 Blade" height="250"/>
-<img src="images/assembled_rack.jpg" alt="Assembled Pi 5 Rack" height="250"/>
+<img src="images/raspi5_nodes.jpg" alt="The four Raspberry Pi 5 nodes in the rack" height="250"/>
 
 The full rack: a switch, the four Pis and the three ThinkCentres.
 
