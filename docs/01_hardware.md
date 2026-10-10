@@ -34,16 +34,29 @@ Seven nodes, all booting from NVMe:
 
 ## Compute: 3x Lenovo ThinkCentre M720q Tiny
 
-| Node | CPU | RAM | SSD | Role |
-|---|---|---|---|---|
-| tc1 | Core i5 8th gen, 6 cores, UHD 630 | 16GB | 1TB NVMe | worker |
-| tc2 | Core i5 8th gen, 6 cores, UHD 630 | 16GB | 256GB NVMe | worker |
-| tc3 | Core i5 8th gen, 6 cores, UHD 630 | 16GB | 256GB NVMe | control-plane |
+<img src="images/thinkcentre_m720q.jpg" alt="The three ThinkCentre M720q nodes, tc3 on top" width="500"/>
+
+| Spec | M720q Tiny |
+|---|---|
+| CPU | Core i5 8th gen, 6 cores, 35W T-series |
+| iGPU | Intel UHD 630 (Gen9.5) |
+| Memory | 2 DDR4 SO-DIMM slots, 32GB max |
+| Storage | 1 M.2 2280 NVMe slot, PCIe 3.0 x4 |
+| Network | 1 GbE |
+| Power | external Lenovo adapter, one per box |
+
+| Node | RAM | SSD | Role |
+|---|---|---|---|
+| tc1 | 16GB | 1TB NVMe | worker |
+| tc2 | 16GB | 256GB NVMe | worker |
+| tc3 | 16GB | 256GB NVMe | control-plane |
 
 - amd64, so they run a stock Talos image from the Image Factory, not the Pi build.
 - The UHD 630 iGPU does hardware video transcoding. The x86 schematic adds its driver. See
   [04_worker_nodes.md](04_worker_nodes.md#the-x86-schematic).
 - Each has 1.5x the cores and 2x the memory of an 8GB Pi, so the scheduler gives it a bigger share of pods.
+- The NVMe link is PCIe 3.0 x4, about 8x the bandwidth of the single Gen2 lane on a Pi.
+- No 5V budget to plan, as on a Pi. The adapter powers the whole box.
 
 ## Rack mount: GeeekPi DP-0046 (10" 2U)
 
