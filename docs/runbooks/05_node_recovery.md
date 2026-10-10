@@ -6,7 +6,7 @@ The reasons behind these steps are in [05_node_recovery.md](../05_node_recovery.
 ## Replace a node
 
 ```bash
-make flash-talos-nvme                # only if the NVMe is new. Pick the node, then boot it with no SD card
+make flash-talos-nvme                # only if the drive is new. Pick the node, then boot it with no SD card
 make recover-node NODE=talos-cp3     # steps 3, 5 and 7 below. Safe to re-run
 make rebalance-workloads             # once everything is healthy
 ```
@@ -27,7 +27,7 @@ Address nodes by IP. Never run `talosctl bootstrap`: that creates a new cluster.
    No ARP entry means the node did not boot or its NIC did not come up. Attach HDMI or a USB-UART console
    (115200 baud, `ttyAMA10`) to tell which.
 
-2. Check the survivors hold quorum. Two of three do, with no spare failure left:
+2. Check the surviving control-plane nodes hold quorum. Two of three do, with no spare failure left:
 
    ```bash
    make talosctl -- -n 192.168.10.201 etcd members    # 3, one unreachable
@@ -69,7 +69,7 @@ Address nodes by IP. Never run `talosctl bootstrap`: that creates a new cluster.
 7. Verify:
 
    ```bash
-   kubectl get nodes                                  # 3 Ready, no out-of-service taint
+   kubectl get nodes                                  # every node Ready, no out-of-service taint
    make talosctl -- -n 192.168.10.201 etcd members    # 3 members
    kubectl get pods -A | grep -Ev 'Running|Completed' # empty
    ```
@@ -115,4 +115,4 @@ Address nodes by IP. Never run `talosctl bootstrap`: that creates a new cluster.
    ```
 
 2. Remove its entry from `inventory.yaml`, so the scripts stop targeting it.
-3. Add a replacement soon. Two nodes have no fault tolerance.
+3. For a control-plane node, add a replacement soon. Two control-plane nodes have no fault tolerance.

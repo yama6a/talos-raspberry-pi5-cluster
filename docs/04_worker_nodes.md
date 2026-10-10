@@ -1,6 +1,6 @@
 # The node inventory, and workers
 
-Where the node list lives, and what changes when a node is not a control-plane Pi. Procedures are in the
+Where the node list lives, and what changes when a node is a worker or is not a Pi. Procedures are in the
 [worker nodes runbook](runbooks/04_worker_nodes.md).
 
 ## inventory.yaml
@@ -29,8 +29,8 @@ Each node needs two artifacts, a raw image for `03a` to flash and an installer f
 | `github-release` | a release asset on `github.com/<repo>/releases/download/${TALOS_IMAGE_RELEASE}/` | a container at `${TALOS_IMAGE_REPO}:${TALOS_IMAGE_RELEASE}` | yes, `sha256sums.txt` |
 | `image-factory` | `factory.talos.dev/image/<id>/${TALOS_VERSION}/<imageFile>` | `factory.talos.dev/metal-installer/<id>:${TALOS_VERSION}` | none, HTTPS only |
 
-- The Pi build exists for the rpi5 overlay and a patched kernel. An x86 node needs neither, so it takes a stock
-  Image Factory image built from `lib/talos/schematic-amd64.yaml`.
+- The Pi build exists for the rpi5 overlay and a patched kernel. The ThinkCentre M720q nodes need neither, so
+  they take a stock Image Factory image built from `lib/talos/schematic-amd64.yaml`.
 - The schematic id is a content hash, resolved at run time, so there is no id to pin and none to go stale.
 - The inventory never names a version. One `TALOS_IMAGE_RELEASE` bump moves every node, because `TALOS_VERSION`
   derives from it.
@@ -39,7 +39,8 @@ Each node needs two artifacts, a raw image for `03a` to flash and an installer f
 
 ## What a worker's config leaves out
 
-A worker gets a strict subset of the control-plane config, from the same script:
+A worker gets a strict subset of the control-plane config, from the same script. The role decides, not the
+hardware: tc3 gets the control-plane config, pi3 gets the worker config.
 
 | | Control-plane | Worker |
 |---|---|---|
@@ -57,7 +58,7 @@ A worker gets a strict subset of the control-plane config, from the same script:
 - **Only control-plane nodes are `talosctl` endpoints.** A worker cannot proxy the Talos API. `-n <worker-ip>`
   still reaches it through a control-plane endpoint.
 - **A worker joins schedulable.** `03g` refuses to run while any node is cordoned. A cordoned worker during a
-  bootstrap also packs everything onto the Pis.
+  bootstrap also packs everything onto the control-plane nodes.
 
 ## Mixed architectures
 
@@ -66,7 +67,7 @@ The scheduler ignores image architecture. An arm64-only image placed on an amd64
 
 - The check belongs with whatever deploys the workloads. It must read the live pods, because most images come
   from upstream and a digest pin can hide a single-platform image.
-- Run it before the first node of a new architecture joins.
+- Run it before a node of a new architecture joins.
 - A failing image needs a multi-arch build, or a `nodeAffinity` on `kubernetes.io/arch`.
 
 ## Reset order: workers first, and finished
@@ -87,20 +88,23 @@ upgrades workers first for a milder reason: a failure there costs no quorum.
 
 ## Scheduling: a bigger node takes a bigger share
 
-`NodeResourcesFit` scores free capacity as a fraction, so nodes converge on the same percentage full. A node with
-4x the memory ends up with about 4x the requests. Nothing balances pod count.
+`NodeResourcesFit` scores free capacity as a fraction, so nodes converge on the same percentage full. A
+ThinkCentre has 16GB and pi4 has 4GB. So a ThinkCentre ends up with about 4x the memory requests of pi4. Nothing
+balances pod count.
 
 - This is accepted. Single-replica pods are what lands on a new node, so the multi-arch check matters.
-- The blast radius follows the share. The Pis cannot absorb a large node's pods if it dies, so alert on
-  cluster-wide memory overcommit.
+- The blast radius follows the share. A ThinkCentre carries the biggest share, so losing one moves the most
+  pods. Alert on cluster-wide memory overcommit.
 - The lever, if it matters, is to advertise less than the hardware has. See the runbook.
 
 ## The x86 schematic
 
-`lib/talos/schematic-amd64.yaml`. Talos ships `i915` as a module, and the base image has no GPU firmware. Without
-the extension the box has no `/dev/dri`, and every transcode runs in software.
+`lib/talos/schematic-amd64.yaml`, used by the three ThinkCentres. Their UHD 630 iGPU does hardware video
+transcoding. Talos ships `i915` as a module, and the base image has no GPU firmware. Without the extension the
+node has no `/dev/dri`, and every transcode runs in software.
 
-- `i915` covers Intel Gen9 through Xe1 graphics. Xe2 and newer need `siderolabs/xe`.
+- `i915` covers Intel Gen9 through Xe1 graphics, which includes the UHD 630 (Gen9.5). Xe2 and newer need
+  `siderolabs/xe`.
 - `siderolabs/mei` (for discrete Arc cards) and `siderolabs/intel-ice-firmware` (for E810 NICs) do nothing for an
   iGPU, although many guides list them.
 - Talos labels the node `extensions.talos.dev/i915`, so a device plugin selects on that without
@@ -109,7 +113,7 @@ the extension the box has no `/dev/dri`, and every transcode runs in software.
   `supplementalGroups`.
 - HuC low-power encode stays off on Gen9.5. To try it, add `i915.enable_guc=2` to `extraKernelArgs`.
 - `talos.dashboard.disabled=1`: a node with a console starts a dashboard, and machined logs every poll feeding
-  it. Talos turns it off on SBCs by default, so only the x86 box needs it.
+  it. Talos turns it off on SBCs by default, so only the x86 nodes need it.
 - Boot UEFI, never legacy BIOS. Talos boots UEFI with systemd-boot and a UKI, and legacy BIOS through GRUB has an
   open boot failure report on HP hardware (siderolabs/talos#13224). The UKI bakes in the kernel command line, so
   kernel args go in the schematic's `customization.extraKernelArgs`, not in `machine.install.extraKernelArgs`.

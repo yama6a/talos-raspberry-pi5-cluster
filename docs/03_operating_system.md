@@ -3,13 +3,13 @@
 The cluster runs Talos Linux: immutable, managed only through its API, built for Kubernetes. Procedures are in
 the [operating system runbook](runbooks/03_operating_system.md).
 
-This doc covers the three Pi 5 control-plane nodes. What differs for a worker, or for hardware with no custom
-build, is in [04_worker_nodes.md](04_worker_nodes.md).
+This doc covers the Pi 5 nodes and the cluster as a whole. What differs for a worker, or for the x86 nodes with
+no custom build, is in [04_worker_nodes.md](04_worker_nodes.md).
 
 ## Why Talos
 
 - The whole node is one declarative config, managed through `talosctl`.
-- Every board runs the same image. Only the config makes a node different.
+- Every Pi runs the same image. Only the config makes a node different.
 - Upgrades are atomic A/B with rollback, through `talosctl upgrade`. Nothing changes in place.
 - Small attack surface: no shell, no SSH, about 12 host binaries. WiFi, Bluetooth and cron are not in the image.
 - Kubernetes is built in. PCIe, cgroups and link speed are set in the image, with no `config.txt` edits.
@@ -77,15 +77,16 @@ Every pin lives in the committed `versions.env`, and Renovate opens PRs to bump 
 `03c` renders the machine config from `inventory.yaml`, `versions.env` and `.env`. The reasons for each setting
 are comments in `lib/shell/03c_talos_cluster_config.sh`. The decisions that shape the cluster:
 
-- **Every node is control-plane and schedulable.** Three nodes give HA etcd and still run workloads.
+- **Three control-plane nodes, all schedulable.** pi1, pi2 and tc3 run etcd and the apiserver. Three members
+  give an odd etcd quorum that survives 1 failure. They still run workloads, next to the four workers.
 - **One cluster PKI, never rotated.** `secrets.yaml` is generated once. The rest of the config is rendered fresh
   on every run, so a version bump in `versions.env` reaches the nodes.
 - **No CNI by default.** `DISABLE_FLANNEL_AND_KUBE_PROXY="true"` turns off both Flannel and kube-proxy, for a CNI
   that replaces both. One switch drives both keys, because Flannel does not replace kube-proxy. The choice is
   fixed at bootstrap.
 - **The VIP floats between control-plane nodes.** Talos claims it over ARP, so it must sit outside the DHCP pool
-  and cannot be reserved to a MAC.
-- **etcd timeouts are 5x the defaults.** etcd shares one NVMe with storage and databases. During a cold boot its
+  and cannot be reserved to a MAC. `03c` binds it to `end0`, the Pi NIC.
+- **etcd timeouts are 5x the defaults.** etcd shares one disk with storage and databases. During a cold boot its
   fsyncs stall past the default election window and trigger a burst of leader elections. The cost is about 5s
   instead of 1s failover when a leader really is gone.
 - **EPHEMERAL is capped, and a `storage` volume takes the rest of the disk.** Talos provisions each volume once.
@@ -120,9 +121,9 @@ node, `03e`:
 - **Health is the cluster's own business.** This repo cannot know what the cluster runs, so the check is a hook.
   Left empty, nothing gates the reboot, and `03e` warns.
 - **etcd is not the hook's job.** `talosctl upgrade` refuses to reboot if that would break quorum.
-- **A storage layer's own "drain replicas off the node" option stays off.** Rebuilding replicas elsewhere needs a
-  spare node and is slow on 3 nodes with 2 replicas. The health hook waits for the storage layer to rebuild a
-  degraded volume by itself instead.
+- **A storage layer's own "drain replicas off the node" option stays off.** Rebuilding replicas elsewhere copies all
+  of the node's data before every reboot, which is slow. The health hook waits for the storage layer to rebuild
+  a degraded volume by itself instead.
 - **Kubernetes upgrades separately.** `03f` runs `talosctl upgrade-k8s`, which rolls the control plane and
   kubelet in place and reboots nothing.
 

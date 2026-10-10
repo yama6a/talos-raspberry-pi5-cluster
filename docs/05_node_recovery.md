@@ -1,6 +1,6 @@
 # Losing and replacing a node
 
-What breaks when one of the three Pis goes away, what comes back by itself, and what needs hands. This covers the
+What breaks when one of the seven nodes goes away, what comes back by itself, and what needs hands. This covers the
 machine layer only. What the workloads do about a node loss is their own business. Procedures are in the
 [node recovery runbook](runbooks/05_node_recovery.md).
 
@@ -39,15 +39,13 @@ Rules for anything that sets the taint automatically:
 
 ## Retiring a node for good
 
-On a 3-node cluster, running on 2 costs this:
+Removing a worker costs capacity. Removing one of the three control-plane nodes costs this:
 
-- etcd has 2 members and still needs 2 for quorum. No fault tolerance at all until you add a node.
-- A workload pinned one per node by hard anti-affinity drops to 2 of 3. It still serves but survives no further
-  loss.
-- Replicated volumes have no spare node. The next failure leaves them degraded, with nowhere to rebuild.
+- etcd has 2 members and still needs 2 for quorum. No fault tolerance at all until you add a control-plane node.
 - The control-plane VIP moves to a survivor by itself.
 
-Two nodes is not a supported steady state. Treat it as a countdown, not a configuration.
+Two control-plane nodes is not a supported steady state. Treat it as a countdown, not a configuration. To get back
+to 3, remove a worker and join it again with `role: controlplane`. The runbook has the steps.
 
 `make remove-node` takes a running node out:
 
@@ -62,11 +60,8 @@ Two nodes is not a supported steady state. Treat it as a countdown, not a config
 
 | Layer | After a machine loss | After a machine replacement |
 |---|---|---|
-| etcd membership | yes, quorum holds on 2 of 3 | no, nothing prunes the old member |
+| etcd membership | yes, quorum holds on 2 of 3 control-plane nodes | no, nothing prunes the old member |
 | Machine config | n/a | no, `make add-node` applies it again from the kept PKI |
 | Kubelet registration | yes | yes, once the config lands |
 | Control-plane VIP | yes, Talos moves it | yes |
 | Anything above the kubelet | not this repo's to say | not this repo's to say |
-
-A 4th machine is the one improvement left. A displaced copy would then have somewhere to go under hard
-anti-affinity, so every "serves on 2 of 3, no spare" case would fully recover.

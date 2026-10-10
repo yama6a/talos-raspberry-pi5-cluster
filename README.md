@@ -1,6 +1,6 @@
 # talos-raspberry-pi5-cluster
 
-**Turns bare Raspberry Pi 5s into a running [Talos Linux](https://www.talos.dev/) Kubernetes cluster.**
+**Turns bare Raspberry Pi 5s and x86 mini PCs into a running [Talos Linux](https://www.talos.dev/) Kubernetes cluster.**
 
 ![Talos](https://img.shields.io/badge/Talos-Linux-ff7300)
 ![Kubernetes](https://img.shields.io/badge/Kubernetes-326ce5?logo=kubernetes&logoColor=white)
@@ -8,10 +8,10 @@
 ![Last commit](https://img.shields.io/github/last-commit/yama6a/talos-raspberry-pi5-cluster)
 
 <p align="center">
-  <img src="docs/images/rackmount_0.jpeg" alt="The assembled 3-node Raspberry Pi 5 cluster in a 10-inch rack" width="600">
+  <img src="docs/images/rackmount_0.jpeg" alt="The Raspberry Pi 5 nodes in a 10-inch rack" width="600">
 </p>
 
-- Hardware, OS and cluster bring-up: flash the NVMe drives, configure Talos, bootstrap etcd, hand over a
+- Hardware, OS and cluster bring-up: flash the SSDs, configure Talos, bootstrap etcd, hand over a
   `kubeconfig`.
 - It stops there. Nothing that runs on the cluster lives here.
 - The node image is built in [talos-raspberry-pi5](https://github.com/yama6a/talos-raspberry-pi5). This repo
@@ -31,13 +31,14 @@
 
 ## Overview
 
-- Three Raspberry Pi 5 boards, every one a control-plane node. etcd runs on all three, and workloads share the
-  same nodes.
-- Talos boots from NVMe. Talos ships no Pi 5 image, so the nodes run a release of
-  [talos-raspberry-pi5](https://github.com/yama6a/talos-raspberry-pi5). It has a Raspberry Pi kernel with 4K
-  pages, plus the extensions the cluster needs.
-- A 4th bay takes a worker, and it does not have to be a Pi. Each node in `inventory.yaml` names its hardware
-  type, and the scripts pick its image from that.
+- Seven nodes: four Raspberry Pi 5 boards (arm64) and three Lenovo ThinkCentre M720q Tiny PCs (amd64).
+- Three nodes are control-plane: two Pis and one ThinkCentre. etcd runs on those three. The other four are
+  workers. Workloads schedule on all seven.
+- The Pis boot Talos from NVMe, the ThinkCentres from 2.5-inch SATA SSDs. Talos ships no Pi 5 image, so the
+  Pis run a release of [talos-raspberry-pi5](https://github.com/yama6a/talos-raspberry-pi5). It has a Raspberry
+  Pi kernel with 4K pages, plus the extensions the cluster needs. The ThinkCentres run a stock Image Factory
+  image.
+- Each node in `inventory.yaml` names its role and hardware type, and the scripts pick its image from that.
 - One Kubernetes object is applied from here: the `nic-keeper` DaemonSet. It is the runtime half of the Pi 5 NIC
   fix, and `03d` applies it.
 
@@ -51,17 +52,24 @@ Config lives in three files. No script hardcodes a value.
 
 ## Hardware
 
-Three Raspberry Pi 5 (8 GB) boards in a 10-inch 2U rack, booting from NVMe. Parts and reasons are in
-[docs/01_hardware.md](docs/01_hardware.md).
+Four Raspberry Pi 5 boards fill all four bays of a 10-inch 2U rack. Three ThinkCentre M720q Tiny PCs complete
+the cluster. Parts and reasons are in [docs/01_hardware.md](docs/01_hardware.md).
 
-| Component    | Choice                                       | Qty                  |
-|--------------|----------------------------------------------|----------------------|
-| SBC          | Raspberry Pi 5, 8 GB                         | 3                    |
-| Rack         | GeeekPi DP-0046 (10" 2U)                     | 1                    |
-| NVMe carrier | 52Pi RS-P11 boards                           | 4 (1 unused for now) |
-| SSD          | Crucial P310 1 TB (CT1000P310SSD8, ~220 TBW) | 3                    |
-| Power        | 27 W USB-C PD (5.1 V / 5 A)                  | 3                    |
-| Cooling      | Pi 5 active cooler + aluminum heat sink      | 3                    |
+| Node     | Hardware                                                   | Role          |
+|----------|------------------------------------------------------------|---------------|
+| pi1, pi2 | Raspberry Pi 5, 8 GB, Crucial P310 1 TB                    | control-plane |
+| pi3      | Raspberry Pi 5, 8 GB, Crucial P310 1 TB                    | worker        |
+| pi4      | Raspberry Pi 5, 4 GB, 256 GB NVMe                          | worker        |
+| tc1      | ThinkCentre M720q, Core i5 8th gen, 16 GB, 1 TB SATA SSD   | worker        |
+| tc2      | ThinkCentre M720q, Core i5 8th gen, 16 GB, 256 GB SATA SSD | worker        |
+| tc3      | ThinkCentre M720q, Core i5 8th gen, 16 GB, 256 GB SATA SSD | control-plane |
+
+| Pi part      | Choice                                       | Qty |
+|--------------|----------------------------------------------|-----|
+| Rack         | GeeekPi DP-0046 (10" 2U)                     | 1   |
+| NVMe carrier | 52Pi RS-P11 boards                           | 4   |
+| Power        | 27 W USB-C PD (5.1 V / 5 A)                  | 4   |
+| Cooling      | Pi 5 active cooler + aluminum heat sink      | 4   |
 
 ## Repository layout
 
@@ -95,7 +103,7 @@ make build-eeprom-card
 cp inventory.example.yaml inventory.yaml   # one entry per node
 cp .env.example .env                       # cluster name, VIP, sizing, GHCR auth
 
-# 3. Flash each NVMe over a USB adapter, then boot the nodes into maintenance mode
+# 3. Flash each SSD over a USB adapter, then boot the nodes into maintenance mode
 make flash-talos-nvme                      # once per drive
 make verify-talos-boot
 
@@ -162,7 +170,7 @@ Each decision doc has a runbook with the same name in [docs/runbooks/](docs/runb
 | [01_hardware](docs/01_hardware.md)                 | The parts and why each was picked.                                              |
 | [02_raspi_eeprom](docs/02_raspi_eeprom.md)         | The Pi 5 EEPROM boot settings.                                                  |
 | [03_operating_system](docs/03_operating_system.md) | Talos, the Pi 5 image, the cluster config, upgrades, NIC hardening.             |
-| [04_worker_nodes](docs/04_worker_nodes.md)         | The node inventory, and a worker that does not have to be a Pi.                 |
+| [04_worker_nodes](docs/04_worker_nodes.md)         | The node inventory, workers, and the x86 nodes.                                 |
 | [05_node_recovery](docs/05_node_recovery.md)       | What a lost or replaced node costs, and what heals by itself.                   |
 | [06_renovate](docs/06_renovate.md)                 | Automated dependency updates, and what merges without review.                   |
 
