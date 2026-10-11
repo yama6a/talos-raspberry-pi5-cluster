@@ -91,6 +91,9 @@ are comments in `lib/shell/03c_talos_cluster_config.sh`. The decisions that shap
   instead of 1s failover when a leader really is gone.
 - **EPHEMERAL is capped, and a `storage` volume takes the rest of the disk.** Talos provisions each volume once.
   An `EPHEMERAL_SIZE` change reaches new nodes only, and renaming the volume orphans the old partition.
+- **Image GC starts at 75% of EPHEMERAL, pod eviction at 85%.** At the kubelet defaults both start at 85%, so
+  a fast image pull can evict pods while unused images still sit on disk. The cost: an image unused for a while
+  is pulled again sooner. An image unused for 7 days goes at any usage.
 - **Registry auth sits on the node.** With `GITHUB_GHCR_PULL_TOKEN_SECRET` set, every node authenticates every
   `ghcr.io` pull, so no workload needs `imagePullSecrets`. The cost: the token lives in the machine config, and
   rotating it means a new `.env` value and `make reapply-talos-config`. GHCR accepts only a classic token.
