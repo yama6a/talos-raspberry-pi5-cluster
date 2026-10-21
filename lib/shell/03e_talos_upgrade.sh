@@ -35,7 +35,7 @@ assert_cluster_reachable() {
 # Never leave a node cordoned or tainted after a failure. A dead-node watcher may set the out-of-service taint
 # during the reboot, and a node that keeps it accepts no pods.
 arm_uncordon_trap() {
-  trap '[ -n "$DRAINING_NODE" ] && { kubectl uncordon "$DRAINING_NODE"; kubectl taint node "$DRAINING_NODE" node.kubernetes.io/out-of-service-; } >/dev/null 2>&1 || true' EXIT
+  trap 'recordon_kept_nodes; [ -n "$DRAINING_NODE" ] && uncordon_node "$DRAINING_NODE"' EXIT
 }
 
 confirm_upgrade() {
@@ -58,13 +58,13 @@ node_for_ip() {
 }
 
 uncordon_node() {
-  kubectl uncordon "$1" > /dev/null 2>&1 || true # Talos also uncordons on rejoin
+  keep_unschedulable "$1" || kubectl uncordon "$1" > /dev/null 2>&1 || true # talosctl upgrade also uncordons
   kubectl taint node "$1" node.kubernetes.io/out-of-service- > /dev/null 2>&1 || true
 }
 
 # Health is asked of a control-plane node, because Talos answers it only there.
 upgrade_host() {
-  local host="$1" ip installer node
+  local host="$1" ip installer node drain_flag=""
   ip="${NODE_IP[$host]}"
   installer="$(installer_ref_for "$host")"
   node="$(node_for_ip "$ip")"
@@ -83,15 +83,17 @@ upgrade_host() {
   drain_node "$node"
 
   say "upgrading ${ip} to ${installer}"
+  # Without its own drain, talosctl also skips the uncordon after the reboot.
+  keep_unschedulable "$node" && drain_flag="--drain=false"
   # talosctl refuses a reboot that would cost etcd quorum. A node already on the target image returns at once.
-  if talosctl -n "$ip" upgrade --image "$installer" --wait --timeout "${HEALTH_TIMEOUT}s"; then
+  if talosctl -n "$ip" upgrade --image "$installer" ${drain_flag:+"$drain_flag"} --wait --timeout "${HEALTH_TIMEOUT}s"; then
     ok "${ip} upgraded"
   else
     die "${ip} upgrade failed, see above. The cluster is left as it is. Fix it and re-run, done nodes are skipped."
   fi
 
   say "waiting for cluster health before the next node"
-  talosctl -n "${CP_IPS[0]}" health --wait-timeout "${HEALTH_TIMEOUT}s" > /dev/null 2>&1 \
+  cluster_health -n "${CP_IPS[0]}" --wait-timeout "${HEALTH_TIMEOUT}s" > /dev/null 2>&1 \
     || die "cluster not healthy after upgrading ${ip}. Stopping. Investigate, then re-run to resume."
 
   uncordon_node "$node"

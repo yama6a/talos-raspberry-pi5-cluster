@@ -142,6 +142,7 @@ lifecycle:
 | `POST_REMOVE_STORAGE_HOOK` | `remove-node`, after the Kubernetes node is deleted | the storage layer keeps its record of the node |
 | `REBALANCE_SKIP_NAMESPACES` | `03g` | every stateless Deployment is restarted |
 | `REBALANCE_PVC_NAMESPACES` | `03g` | a Deployment that mounts a PVC is never restarted |
+| `KEEP_UNSCHEDULABLE` | `03e` and `check-health` | a cordoned node fails `talosctl health`, and `03e` uncordons every node it upgrades |
 
 ## Day-2 operations
 

@@ -79,7 +79,7 @@ print-kubeconfig: ## Print an export line that points one shell at the cluster a
 ##@ Health and inspection  (read-only, through the dockerized talosctl)
 .PHONY: check-health
 check-health: ## Wait for and report Talos cluster health.
-	@bash -c 'source lib/shell/common.sh && talosctl health'
+	@bash -c 'source lib/shell/common.sh && cluster_health'
 
 .PHONY: talosctl
 talosctl: ## Run dockerized talosctl, e.g. `make talosctl get members`. A flag needs `--` first: `make talosctl -- -n <ip> etcd members`.
