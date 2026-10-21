@@ -36,6 +36,7 @@ source "$ENV_FILE"
 : "${FORCE_DELETE_SKIP:=}"
 : "${REBALANCE_SKIP_NAMESPACES:=}"
 : "${REBALANCE_PVC_NAMESPACES:=}"
+: "${KEEP_UNSCHEDULABLE:=}"
 
 # Fixed by the hardware, not per deployment, so not in .env.
 EXPECT_NIC="end0"                                     # the Pi 5 wired NIC. The VIP binds to it
@@ -267,6 +268,36 @@ run_step() {
     return 1
   fi
   die "${hint:-${script} failed. Fix it and resume from ${script%.sh} by hand}"
+}
+
+# ---- health ----
+
+keep_unschedulable() { [[ " ${KEEP_UNSCHEDULABLE} " == *" $1 "* ]]; }
+
+HEALTH_OPENED="" # the KEEP_UNSCHEDULABLE nodes cluster_health uncordoned and must cordon again
+
+recordon_kept_nodes() {
+  local n
+  for n in $HEALTH_OPENED; do kubectl cordon "$n" > /dev/null 2>&1 || warn "could not cordon ${n} again. Run: kubectl cordon ${n}"; done
+  HEALTH_OPENED=""
+}
+
+# cluster_health [talosctl health flags]. talosctl health fails while any node is unschedulable and cannot
+# skip that check, so the KEEP_UNSCHEDULABLE nodes are uncordoned for the run. Pods can land there meanwhile.
+cluster_health() {
+  local n rc=0
+  if [ -n "$KEEP_UNSCHEDULABLE" ]; then
+    use_kubeconfig
+    for n in $KEEP_UNSCHEDULABLE; do
+      [ "$(kubectl get node "$n" -o jsonpath='{.spec.unschedulable}')" = true ] || continue
+      kubectl uncordon "$n" > /dev/null && HEALTH_OPENED="${HEALTH_OPENED} ${n}"
+    done
+    trap 'recordon_kept_nodes; exit 130' INT TERM
+  fi
+  talosctl health "$@" || rc=$?
+  recordon_kept_nodes
+  trap - INT TERM
+  return "$rc"
 }
 
 # ---- drain ----
