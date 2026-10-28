@@ -94,6 +94,10 @@ are comments in `lib/shell/03c_talos_cluster_config.sh`. The decisions that shap
 - **Image GC starts at 75% of EPHEMERAL, pod eviction at 85%.** At the kubelet defaults both start at 85%, so
   a fast image pull can evict pods while unused images still sit on disk. The cost: an image unused for a while
   is pulled again sooner. An image unused for 7 days goes at any usage.
+- **The apiserver turns off nine histograms.** `--disabled-metrics` lists them. Together they are about 9.5 MB of
+  a 15 MB `/metrics` body and about 65,000 series, and no dashboard or alert reads them. The cost: a per-resource
+  latency or size question needs the flag edited and a reapply first. The flag ignores a name that does not
+  exist, so a metric renamed in a Kubernetes upgrade comes back without warning.
 - **Registry auth sits on the node.** With `GITHUB_GHCR_PULL_TOKEN_SECRET` set, every node authenticates every
   `ghcr.io` pull, so no workload needs `imagePullSecrets`. The cost: the token lives in the machine config, and
   rotating it means a new `.env` value and `make reapply-talos-config`. GHCR accepts only a classic token.
