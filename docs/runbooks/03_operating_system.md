@@ -75,6 +75,14 @@ Gotchas:
 - `make init-talos` cannot change a running cluster. It waits for maintenance mode and fails after 300s per node.
   Use `make reapply-talos-config`.
 - Volume sizes are fixed when a node is first configured. An `EPHEMERAL_SIZE` change reaches new nodes only.
+- Without `NODE`, `make reapply-talos-config` applies to every node back to back. A change to an apiserver
+  setting then restarts all three apiservers at once. Pass one control-plane node at a time, and wait until its
+  pod is Ready:
+
+  ```bash
+  make reapply-talos-config NODE=<host>
+  kubectl -n kube-system get pod kube-apiserver-<host> -w     # 1/1 Running with a new AGE
+  ```
 
 ## Verify the cluster
 

@@ -256,6 +256,19 @@ resources:
 # Much lower, and a re-list storm would keep the collector running nonstop.
 env:
   GOMEMLIMIT: 1500MiB
+# Histograms no dashboard or alert reads. A disabled metric is never recorded, so it costs no CPU or memory.
+# apiserver_request_duration_seconds stays, because a dashboard reads its _count and _sum.
+extraArgs:
+  disabled-metrics:
+    - apiserver_request_sli_duration_seconds
+    - etcd_request_duration_seconds
+    - apiserver_watch_events_dispatch_duration_seconds
+    - apiserver_response_sizes
+    - apiserver_watch_list_duration_seconds
+    - apiserver_request_body_size_bytes
+    - apiserver_storage_list_duration_seconds
+    - apiserver_watch_cache_initialization_duration_seconds
+    - apiserver_watch_cache_read_wait_seconds
 certExtraSANs:
 ${certsans}
 ---
