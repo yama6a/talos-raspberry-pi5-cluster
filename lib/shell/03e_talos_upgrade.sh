@@ -6,8 +6,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 
 # ---- knobs ----
-HEALTH_TIMEOUT=1800             # secs per node for reboot, installer pull and rejoin, over your home link
-REPLICATION_HEALTH_TIMEOUT=1800 # secs to wait for PRE_DRAIN_HEALTH_HOOK before draining each node
+HEALTH_TIMEOUT=1800 # secs per node for reboot, installer pull and rejoin, over your home link
+# Longhorn waits 30 min (replica-replenishment-wait-interval) before it rebuilds a replica the last reboot lost,
+# then copies it. A 100Gi volume needs about 50 min in all.
+REPLICATION_HEALTH_TIMEOUT=3600 # secs to wait for PRE_DRAIN_HEALTH_HOOK before draining each node
 # Keep GRACEFUL_DRAIN_TIMEOUT above a database switchover: its PDB refuses the eviction until the handover ends.
 GRACEFUL_DRAIN_TIMEOUT=600 # secs of graceful drain before the force-delete
 FORCE_GRACE=20             # secs of grace on the force-delete, so stragglers can flush. 0 kills at once
