@@ -42,7 +42,7 @@ reapply-talos-config: ## 03c: push a changed machine config to running nodes, af
 	bash lib/shell/03c_talos_cluster_config.sh --reapply $(NODE)
 
 .PHONY: harden-nics
-harden-nics: ## 03d: harden the Pi 5 NICs: machine config for offloads, rings and watchdog, plus the nic-keeper DaemonSet.
+harden-nics: ## 03d: apply the nic-keeper DaemonSet and check the Pi 5 NIC offloads, rings and watchdog that 03c set.
 	bash lib/shell/03d_nic_hardening.sh
 
 .PHONY: upgrade-talos

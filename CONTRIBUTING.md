@@ -55,8 +55,8 @@ Run the steps in order: `02_raspi_eeprom`, then `03a` to `03g`. Use the Makefile
 
 ## The one manifest this repo applies
 
-`lib/k8s/nic-keeper.yaml` works around the Pi 5 `macb` NIC wedge at runtime. `03d` is the machine-config half of
-the same fix and applies both, so they land together and before any CNI.
+`lib/k8s/nic-keeper.yaml` works around the Pi 5 `macb` NIC wedge at runtime. `03c` holds the machine-config half
+of the same fix. `03d` applies the manifest before any CNI and checks both halves.
 
 - Plain manifests, no templating and no packaging. The loop script's tunables are plain assignments in its
   `# ---- knobs ----` block.

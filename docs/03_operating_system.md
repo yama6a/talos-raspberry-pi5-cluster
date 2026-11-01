@@ -56,7 +56,7 @@ What the image carries that this cluster depends on:
   work with 16K pages.
 - The `iscsi-tools` extension, because iSCSI-based CSI drivers need `iscsid`, and `util-linux-tools` for
   `fstrim`.
-- Built-in drivers that `03d` and a storage layer need: the Pi 5 watchdog, NVMe over PCIe, the `macb` NIC and
+- Built-in drivers that the NIC fix and a storage layer need: the Pi 5 watchdog, NVMe over PCIe, the `macb` NIC and
   RP1 bring-up. Also `INET_DIAG_DESTROY`, which lets `nic-keeper` close sockets with `ss -K`.
 - WiFi and Bluetooth off in the device tree. The VIP still binds to `end0` by name, so it can never land on a
   wireless link.
@@ -151,24 +151,25 @@ Deployments so the scheduler places them again. `03e` runs it at the end.
 ## NIC hardening
 
 The Pi 5 `macb` NIC wedges ([sbc-raspberrypi #91](https://github.com/siderolabs/sbc-raspberrypi/issues/91)). A
-newer kernel does not fix it, so the fix is config and a runtime agent. `03d` applies both halves before any CNI
-is installed, so the NIC is hardened before the network-heavy CNI rollout.
+newer kernel does not fix it, so the fix is config and a runtime agent. `03c` writes the config half into every
+Pi 5 node's machine config. `03d` applies the agent before any CNI, so the NIC is hardened before the
+network-heavy CNI rollout.
 
 | Trigger | Fix | Where |
 |---|---|---|
-| silent TSO/GSO transmit-ring hang | offloads off, receive and transmit rings at the NIC maximum (`EthernetConfig`) | `03d`, machine config |
-| full node hang | hardware watchdog reboots the node (`WatchdogTimerConfig`) | `03d`, machine config |
+| silent TSO/GSO transmit-ring hang | offloads off, receive and transmit rings at the NIC maximum (`EthernetConfig`) | `03c`, machine config |
+| full node hang | hardware watchdog reboots the node (`WatchdogTimerConfig`) | `03c`, machine config |
 | Energy Efficient Ethernet wakes the link too slowly | `ethtool --set-eee end0 eee off` | `nic-keeper` |
 | link up, but no traffic passes | a ping probe, then `ip link` down and up | `nic-keeper` |
 | kubelet's API sockets hang after a link bounce | `ss -K` drops them so they reconnect | `nic-keeper` |
 
-The machine-config half, `03d`:
+The machine-config half, a patch `03c` adds for every node of type `rpi5`:
 
-- Reads the ring maximums, offload keys and watchdog device from the live node, instead of hardcoding them.
-- Patches documents with `talosctl patch mc --mode no-reboot`, so it never reboots a node and never replaces the
-  config `03c` applied.
-- Waits for the API to answer steadily over the VIP before it exits. The ring change bounces `end0`, which
-  carries the VIP.
+- It is part of every `apply-config`, because `apply-config` replaces the whole machine config. A separate
+  `talosctl patch mc` disappears at the next reapply, `add-node` or node recovery.
+- The ring maximums, offload keys and watchdog device are constants in `lib/shell/common.sh`. Every Pi is the
+  same Pi 5 model, so the values are the same on every node.
+- `03d` checks that each Pi runs with these values, from `EthernetStatus` and `WatchdogTimerStatus`.
 
 The runtime half, `nic-keeper`, one pod per Pi 5 node:
 
@@ -179,7 +180,7 @@ The runtime half, `nic-keeper`, one pod per Pi 5 node:
 | a runtime agent, not machine config | Talos has no `EthernetConfig` field for EEE, and wedge detection has to react |
 | a ping probe, not the carrier state | a wedged link keeps carrier up, so only traffic shows the wedge |
 | `NET_ADMIN` and `NET_RAW`, not `privileged` | enough for `ethtool`, `ip link`, `ss -K` and `ping` |
-| applied by `03d`, not by a GitOps tool | it is the other half of `03d` and must run before the CNI. Nothing reconciles it |
+| applied by `03d`, not by a GitOps tool | it must run before the CNI. Nothing reconciles it |
 | `instance-type: rpi5` node selector | the wedge is Pi 5 only. `03c` stamps the label from the node's `type` in `inventory.yaml`, and that label key is one the kubelet may set |
 
 - It lands before any CNI, because the DaemonSet controller tolerates `node.kubernetes.io/not-ready` and the pod
