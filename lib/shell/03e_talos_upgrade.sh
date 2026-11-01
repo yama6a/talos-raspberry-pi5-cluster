@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Rolling upgrade of the Talos OS, one node at a time. Kubernetes is 03f. A re-run skips nodes already done.
+# Rolling upgrade of the Talos OS, one node at a time. Kubernetes is 03f. Takes optional hostnames to upgrade
+# only those, which is how a stopped run resumes.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,6 +22,19 @@ DRAINING_NODE="" # the EXIT trap reads it
 HOOK_WARNED=0
 
 # ---- functions ----
+
+# Each node gets a primary switchover and a drain before talosctl sees it, so a node already done must be left
+# out by name. A node reports its Talos version but not the build revision, so the script cannot tell on its own.
+select_hosts() {
+  local h all
+  [ $# -gt 0 ] || return 0
+  for h in "$@"; do
+    [ -n "${NODE_ROLE[$h]:-}" ] || die "unknown node '${h}': inventory.yaml has ${ALL_HOSTS[*]}"
+  done
+  all=("${HOSTS[@]}")
+  HOSTS=()
+  for h in "${all[@]}"; do [[ " $* " == *" ${h} "* ]] && HOSTS+=("$h"); done
+}
 
 assert_cluster_reachable() {
   require docker kubectl
@@ -47,7 +61,7 @@ confirm_upgrade() {
     printf 'Node:   %-12s %-16s %-16s %s\n' "$h" "${NODE_IP[$h]}" "${NODE_TYPE[$h]}" "$(installer_ref_for "$h")"
   done
   echo
-  warn "this reboots every node in turn, a few minutes each. etcd keeps quorum throughout."
+  warn "this reboots each node above in turn, a few minutes each. etcd keeps quorum throughout."
   printf '>> proceed with the rolling upgrade? Type yes: '
   read -r answer < /dev/tty 2> /dev/null || answer=""
   [ "$answer" = "yes" ] || die "aborted"
@@ -65,8 +79,9 @@ uncordon_node() {
 }
 
 # Health is asked of a control-plane node, because Talos answers it only there.
+# $2 and $3 are the nodes still to do, with and without this one, for the resume hint.
 upgrade_host() {
-  local host="$1" ip installer node drain_flag=""
+  local host="$1" from_here="$2" after_here="$3" ip installer node drain_flag="" resume
   ip="${NODE_IP[$host]}"
   installer="$(installer_ref_for "$host")"
   node="$(node_for_ip "$ip")"
@@ -91,12 +106,14 @@ upgrade_host() {
   if talosctl -n "$ip" upgrade --image "$installer" ${drain_flag:+"$drain_flag"} --wait --timeout "${HEALTH_TIMEOUT}s"; then
     ok "${ip} upgraded"
   else
-    die "${ip} upgrade failed, see above. The cluster is left as it is. Fix it and re-run, done nodes are skipped."
+    die "${ip} upgrade failed, see above. The cluster is left as it is. Fix it, then resume: make upgrade-talos NODES=\"${from_here}\""
   fi
 
   say "waiting for cluster health before the next node"
+  resume="Nothing is left to upgrade."
+  [ -n "$after_here" ] && resume="Then resume: make upgrade-talos NODES=\"${after_here}\""
   cluster_health -n "${CP_IPS[0]}" --wait-timeout "${HEALTH_TIMEOUT}s" > /dev/null 2>&1 \
-    || die "cluster not healthy after upgrading ${ip}. Stopping. Investigate, then re-run to resume."
+    || die "cluster not healthy after upgrading ${ip}. Stopping. Investigate. ${resume}"
 
   uncordon_node "$node"
   DRAINING_NODE=""
@@ -119,12 +136,13 @@ print_result() {
 
 # ---- main ----
 
+select_hosts "$@"
 assert_cluster_reachable
 arm_uncordon_trap
 confirm_upgrade
 
-for host in "${HOSTS[@]}"; do
-  upgrade_host "$host"
+for i in "${!HOSTS[@]}"; do
+  upgrade_host "${HOSTS[$i]}" "${HOSTS[*]:i}" "${HOSTS[*]:i+1}"
 done
 
 rebalance_workloads
