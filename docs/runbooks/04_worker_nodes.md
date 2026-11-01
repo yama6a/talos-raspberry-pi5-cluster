@@ -46,11 +46,12 @@ never rewrites the stored `machine.install.image`, so reapply first:
 
 ```bash
 make reapply-talos-config NODE=<x86-host>
-make upgrade-talos
+make upgrade-talos NODES=<x86-host>
 ```
 
 Without the reapply, the node keeps the old ref, and a later recovery reinstalls it without the change.
-`make upgrade-talos` walks every node and reboots each one whose image differs from `versions.env`.
+`make upgrade-talos` reinstalls and reboots every node it is given, even one already on the target image, so
+name only the node that changed.
 
 ## Make a large node score like a small one
 

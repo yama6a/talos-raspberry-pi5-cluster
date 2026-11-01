@@ -43,7 +43,8 @@ Run the steps in order: `02_raspi_eeprom`, then `03a` to `03g`. Use the Makefile
 
 - Output helpers come from `common.sh`: `say`, `die`, `warn`, `ok` and `bad`. Scripts also use the `PASS` and
   `FAIL` counters, a trailing `summary`, and a non-zero exit on any failure.
-- Idempotent and safe to re-run. Re-running after a partial failure is the normal recovery path.
+- Idempotent and safe to re-run. Re-running after a partial failure is the normal recovery path. `03e` is the
+  exception: it reinstalls every node it is given, so a stopped upgrade resumes with `NODES`.
 - Script-local tunables go in a `# ---- knobs ----` block near the top, as plain assignments. No
   `${VAR:-default}` env overrides: to change a value, edit it.
 - The PASS/FAIL scripts use `set -uo pipefail` without `-e`, so every check runs and the summary is complete.
