@@ -57,7 +57,7 @@ hardware: tc3 gets the control-plane config, pi3 gets the worker config.
   one `gen config` per role serves any mix of hardware.
 - **Only control-plane nodes are `talosctl` endpoints.** A worker cannot proxy the Talos API. `-n <worker-ip>`
   still reaches it through a control-plane endpoint.
-- **A worker joins schedulable.** `03g` refuses to run while any node is cordoned. A cordoned worker during a
+- **A worker joins schedulable.** `03g` refuses to run while any node outside `KEEP_UNSCHEDULABLE` is cordoned. A cordoned worker during a
   bootstrap also packs everything onto the control-plane nodes.
 
 ## Mixed architectures
