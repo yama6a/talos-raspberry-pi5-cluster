@@ -143,7 +143,7 @@ Deployments so the scheduler places them again. `03e` runs it at the end.
 - A nudge, not a guarantee. The scheduler scores each pod alone, so a run can still clump. The real fix is
   `topologySpreadConstraints` on the workloads.
 - Refuses to run unless every node is Ready, schedulable, and counted in `inventory.yaml`. Restarting with a node
-  cordoned only packs the others.
+  cordoned only packs the others. A node in `KEEP_UNSCHEDULABLE` may stay cordoned and gets no pods.
 - Skips a Deployment in `REBALANCE_SKIP_NAMESPACES`, one scaled to 0, and one that mounts a PVC. A PVC is moved
   only in `REBALANCE_PVC_NAMESPACES` and only with the `Recreate` strategy.
 - Tests for a PVC, not for a name, so operator-generated names cannot make the list go stale.
