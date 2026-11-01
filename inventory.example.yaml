@@ -18,7 +18,7 @@ nodes:
   - host: talos-cp1
     ip: 192.168.1.11
     role: controlplane
-    type: rpi5 # the one type the scripts special-case: 03d hardens the NIC and 03b checks end0 and the kernel
+    type: rpi5 # the one type the scripts special-case: 03c and 03d harden the NIC, 03b checks end0 and the kernel
     imageSource: github-release
     imageFile: metal-arm64-rpi5.raw.xz
     installDisk: /dev/nvme0n1

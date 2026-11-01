@@ -75,6 +75,8 @@ Gotchas:
 - `make init-talos` cannot change a running cluster. It waits for maintenance mode and fails after 300s per node.
   Use `make reapply-talos-config`.
 - Volume sizes are fixed when a node is first configured. An `EPHEMERAL_SIZE` change reaches new nodes only.
+- The first apply of the Pi 5 NIC config restarts `end0` on each Pi, and `end0` carries the VIP. Apply it one
+  control-plane node at a time, as below.
 - Without `NODE`, `make reapply-talos-config` applies to every node back to back. A change to an apiserver
   setting then restarts all three apiservers at once. Pass one control-plane node at a time, and wait until its
   pod is Ready:
@@ -95,8 +97,8 @@ make talosctl -- -n <cp1-ip> etcd members                # one member per contro
 
 ## Harden the NICs
 
-`make bootstrap-cluster` runs this. Run it by hand after a change to `lib/k8s/nic-keeper.yaml` or a Renovate bump
-of its image.
+`make bootstrap-cluster` runs this. Run it by hand after a change to `lib/k8s/nic-keeper.yaml`, a Renovate bump
+of its image, or a reapply. It applies `nic-keeper` and checks the offloads, rings and watchdog that `03c` set.
 
 ```bash
 make harden-nics
@@ -106,9 +108,8 @@ Expected: `[PASS]` per check, then `summary: N passed, 0 failed`.
 
 | Failure | Meaning |
 |---|---|
-| `patch` fails and mentions a reboot | the change needed a reboot and the script refused. Investigate before you force it |
-| watchdog not armed | the timeout is above the hardware maximum. Lower `WATCHDOG_TIMEOUT` in `03d` |
-| API not steady | the VIP did not settle in time. Wait, or raise `SETTLE_WAIT`, before you install a CNI |
+| offload or ring check fails | the node runs a config without the Pi 5 patch. Run `make reapply-talos-config NODE=<host>` |
+| watchdog not armed, after a reapply | the timeout is above the hardware maximum. Lower `RPI5_WATCHDOG_TIMEOUT` in `common.sh` |
 
 Check `nic-keeper`:
 

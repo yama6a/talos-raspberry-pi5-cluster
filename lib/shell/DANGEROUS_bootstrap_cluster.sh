@@ -133,7 +133,7 @@ assert_nodes_in_maintenance
 boot_verify_nodes
 archive_existing_creds
 run_step "new PKI, apply config, bootstrap etcd" "$STEP_DIR" 03c_talos_cluster_config.sh
-run_step "NIC hardening: offloads, watchdog, nic-keeper" "$STEP_DIR" 03d_nic_hardening.sh
+run_step "NIC hardening: nic-keeper, NIC checks" "$STEP_DIR" 03d_nic_hardening.sh
 
 summary
 print_handoff

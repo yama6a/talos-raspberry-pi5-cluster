@@ -10,7 +10,7 @@ string. `inventory.example.yaml` documents every field. `common.sh` parses the f
 every script iterates.
 
 - **Derived, not stored.** Seven keys, one of them optional. There is no `arch`: `imageFile` names it and the
-  kubelet sets `kubernetes.io/arch`. Which `03b` checks run and whether `03d` hardens the NIC follow from `type`.
+  kubelet sets `kubernetes.io/arch`. Which `03b` checks run and whether the node gets the Pi 5 NIC fix follow from `type`.
 - **`installDisk` has no default.** A default of `/dev/nvme0n1` would let a forgotten value install to a device
   nobody looked at. `03b` and `03c` both check that the node has the disk before anything is written.
 - **`imageSource` is spelled out, although `imageSchematic` implies it.** "Where does this node's image come

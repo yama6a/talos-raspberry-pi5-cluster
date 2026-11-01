@@ -40,10 +40,17 @@ source "$ENV_FILE"
 
 # Fixed by the hardware, not per deployment, so not in .env.
 EXPECT_NIC="end0"                                     # the Pi 5 wired NIC. The VIP binds to it
+RPI5_RINGS_RX=8192                                    # the Pi 5 NIC's receive ring maximum
+RPI5_RINGS_TX=4096                                    # the Pi 5 NIC's transmit ring maximum
+RPI5_WATCHDOG_DEVICE="/dev/watchdog0"                 # the Pi 5 SoC watchdog
+RPI5_WATCHDOG_TIMEOUT="15s"                           # Talos minimum 10s, Pi hardware maximum about 15s
 API_PORT=50000                                        # Talos API
 GHCR_SERVER="ghcr.io"                                 # the registry the GHCR pull token is for
 TALOS_IMAGE_REPO="ghcr.io/yama6a/talos-raspberry-pi5" # the Pi 5 Talos image. TALOS_IMAGE_RELEASE pins the tag
 FACTORY_HOST="factory.talos.dev"                      # stock images for hardware without a custom build
+# TCP segmentation, generic segmentation and receive coalescing, as kernel feature names. EthernetConfig
+# rejects the broader names `ethtool -k` prints.
+RPI5_OFFLOADS_OFF=(tx-tcp-segmentation tx-generic-segmentation rx-gro)
 # Each label must match a volume the machine config still declares, or the whole reset fails. For a dropped
 # volume use `talosctl wipe disk <part> --drop-partition`. BOOT, EFI and META stay, so no reflash is needed.
 WIPE_LABELS="STATE,EPHEMERAL,u-storage"

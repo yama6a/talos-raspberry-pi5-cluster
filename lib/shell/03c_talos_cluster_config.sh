@@ -343,6 +343,28 @@ filesystem:
 EOF
 }
 
+# The machine-config half of the Pi 5 `macb` NIC fix (siderolabs/sbc-raspberrypi #91). It lives here, not in a
+# `patch mc`, because every apply-config replaces the whole machine config. The why is in docs/03_operating_system.md.
+write_rpi5_patch() {
+  local k
+  {
+    echo "---"
+    echo "apiVersion: v1alpha1"
+    echo "kind: EthernetConfig"
+    echo "name: ${IFACE}"
+    echo "rings:"
+    echo "  rx: ${RPI5_RINGS_RX}"
+    echo "  tx: ${RPI5_RINGS_TX}"
+    echo "features:"
+    for k in "${RPI5_OFFLOADS_OFF[@]}"; do echo "  ${k}: false"; done
+    echo "---"
+    echo "apiVersion: v1alpha1"
+    echo "kind: WatchdogTimerConfig"
+    echo "device: ${RPI5_WATCHDOG_DEVICE}"
+    echo "timeout: ${RPI5_WATCHDOG_TIMEOUT}"
+  } > "${TALOS_SCRATCH}/rpi5-patch.yaml"
+}
+
 # Only a maintenance node answers --insecure. After a reset the nodes reboot at their own pace, so this waits
 # until each is really back, or the insecure apply fails on a slow one.
 wait_for_maintenance() {
@@ -399,7 +421,7 @@ report_hardware() {
 apply_to() {
   local host="$1"
   shift
-  local ip="${NODE_IP[$host]}" base rpatch ipatch lpatch
+  local ip="${NODE_IP[$host]}" base rpatch ipatch lpatch hpatch=()
   case "${NODE_ROLE[$host]}" in
     controlplane)
       base="/scratch/controlplane.yaml"
@@ -414,9 +436,11 @@ apply_to() {
     "$(installer_ref_for "$host")" "${NODE_INSTALL_DISK[$host]}")"
   lpatch="$(printf '{"apiVersion":"v1alpha1","kind":"KubeNodeConfig","labels":{"node.kubernetes.io/instance-type":"%s"}}' \
     "${NODE_TYPE[$host]}")"
+  [ "${NODE_TYPE[$host]}" = rpi5 ] && hpatch=(-p @/scratch/rpi5-patch.yaml)
   talosctl apply-config -e "${ip}" -n "${ip}" -f "$base" \
     -p @"$rpatch" \
     -p @/scratch/volumes.yaml \
+    "${hpatch[@]}" \
     -p "$ipatch" \
     -p "$lpatch" \
     -p '{"apiVersion":"v1alpha1","kind":"HostnameConfig","hostname":"'"${host}"'","auto":"off"}' \
@@ -507,6 +531,7 @@ set_talosconfig_endpoints
 write_control_plane_patch
 write_worker_patch
 write_volume_config
+write_rpi5_patch
 
 if [ "$REAPPLY" = true ]; then
   assert_nodes_running

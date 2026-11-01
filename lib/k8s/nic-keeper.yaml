@@ -1,4 +1,4 @@
-# The runtime half of the Pi 5 macb NIC fix. 03d applies it together with the machine-config half.
+# The runtime half of the Pi 5 macb NIC fix. 03d applies it. 03c holds the machine-config half.
 # See docs/03_operating_system.md.
 ---
 apiVersion: v1
@@ -12,7 +12,7 @@ data:
   nic-keeper.sh: |
     #!/bin/sh
     # Only ever touches $IFACE. Every sleep is bounded so the loop always makes progress and never
-    # trips the 03d hardware watchdog.
+    # trips the hardware watchdog.
     set -u
 
     # ---- knobs ----
