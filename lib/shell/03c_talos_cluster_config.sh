@@ -382,6 +382,18 @@ wait_for_maintenance() {
   done
 }
 
+# The config carries the kubelet and control-plane images of versions.env, so a reapply after a Renovate bump
+# would upgrade Kubernetes on every node at once, past the checks of `make upgrade-k8s`.
+assert_kubernetes_version() {
+  local versions
+  require kubectl
+  use_kubeconfig
+  versions="$(kubectl get nodes -o jsonpath='{range .items[*]}{.status.nodeInfo.kubeletVersion}{"\n"}{end}' | sort -u)" \
+    || die "kubectl could not list nodes through ${KUBECONFIG}"
+  [ "$versions" = "v${KVER}" ] \
+    || die "versions.env pins Kubernetes ${KVER}, but the kubelets run $(tr '\n' ' ' <<< "$versions"). Run make upgrade-k8s first."
+}
+
 # The opposite test: a secure answer proves the node already holds our PKI.
 assert_nodes_running() {
   local host ip
@@ -534,6 +546,7 @@ write_volume_config
 write_rpi5_patch
 
 if [ "$REAPPLY" = true ]; then
+  assert_kubernetes_version
   assert_nodes_running
   confirm_reapply
 else

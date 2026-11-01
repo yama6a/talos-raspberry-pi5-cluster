@@ -75,6 +75,8 @@ Gotchas:
 - `make init-talos` cannot change a running cluster. It waits for maintenance mode and fails after 300s per node.
   Use `make reapply-talos-config`.
 - Volume sizes are fixed when a node is first configured. An `EPHEMERAL_SIZE` change reaches new nodes only.
+- `make reapply-talos-config` stops when the kubelets do not run `KUBERNETES_VERSION` from `versions.env`. Run
+  `make upgrade-k8s` first. The config carries that version, so a reapply would upgrade every node at once.
 - The first apply of the Pi 5 NIC config restarts `end0` on each Pi, and `end0` carries the VIP. Apply it one
   control-plane node at a time, as below.
 - Without `NODE`, `make reapply-talos-config` applies to every node back to back. A change to an apiserver
