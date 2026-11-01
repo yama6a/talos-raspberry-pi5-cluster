@@ -46,8 +46,8 @@ harden-nics: ## 03d: apply the nic-keeper DaemonSet and check the Pi 5 NIC offlo
 	bash lib/shell/03d_nic_hardening.sh
 
 .PHONY: upgrade-talos
-upgrade-talos: ## 03e: rolling in-place upgrade of the Talos OS to the pinned installer image.
-	bash lib/shell/03e_talos_upgrade.sh
+upgrade-talos: ## 03e: rolling in-place upgrade of the Talos OS to the pinned installer image. NODES="<host> ..." for only those.
+	bash lib/shell/03e_talos_upgrade.sh $(NODES)
 
 .PHONY: upgrade-k8s
 upgrade-k8s: ## 03f: rolling in-place upgrade of Kubernetes to the pinned version.

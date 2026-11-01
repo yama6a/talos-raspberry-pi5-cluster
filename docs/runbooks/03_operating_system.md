@@ -141,7 +141,13 @@ A recovery in a pod's log looks like this:
 
 3. Check the result: `make talosctl -- version` and `kubectl get nodes`.
 
-If it stops, re-run it. Nodes already on the target image are skipped.
+If it stops, resume with the nodes still to do. The error names them:
+
+```bash
+make upgrade-talos NODES="pi2 tc3"
+```
+
+A plain re-run switches over the database primaries and drains the finished nodes again.
 
 Gotcha: when a graceful drain times out, Talos's own drain can still find a terminating pod and fail with:
 
