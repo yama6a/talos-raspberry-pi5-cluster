@@ -33,7 +33,9 @@ select_hosts() {
   done
   all=("${HOSTS[@]}")
   HOSTS=()
-  for h in "${all[@]}"; do [[ " $* " == *" ${h} "* ]] && HOSTS+=("$h"); done
+  for h in "${all[@]}"; do
+    if [[ " $* " == *" ${h} "* ]]; then HOSTS+=("$h"); fi
+  done
 }
 
 assert_cluster_reachable() {
