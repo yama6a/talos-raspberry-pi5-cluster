@@ -156,8 +156,8 @@ error when evicting pods/"instance-manager-..." -n "longhorn-system":
 client rate limiter Wait returned an error: rate: Wait(n=1) would exceed context deadline
 ```
 
-`03e` leaves the node uncordoned. Re-run it. If it recurs on the same node, raise `GRACEFUL_DRAIN_TIMEOUT` in
-`03e`. Do not lower `FORCE_GRACE`.
+`03e` leaves the node uncordoned. Resume from that node with `NODES`, as above. If it recurs on the same node,
+raise `GRACEFUL_DRAIN_TIMEOUT` in `03e`. Do not lower `FORCE_GRACE`.
 
 ## Upgrade Kubernetes
 

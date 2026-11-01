@@ -104,7 +104,7 @@ upgrade_host() {
   say "upgrading ${ip} to ${installer}"
   # Without its own drain, talosctl also skips the uncordon after the reboot.
   keep_unschedulable "$node" && drain_flag="--drain=false"
-  # talosctl refuses a reboot that would cost etcd quorum. A node already on the target image returns at once.
+  # talosctl refuses a reboot that would cost etcd quorum. It reinstalls and reboots even on the same image.
   if talosctl -n "$ip" upgrade --image "$installer" ${drain_flag:+"$drain_flag"} --wait --timeout "${HEALTH_TIMEOUT}s"; then
     ok "${ip} upgraded"
   else
