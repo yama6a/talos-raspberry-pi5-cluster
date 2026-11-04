@@ -19,27 +19,25 @@ BATCH_NAMES=()
 
 # ---- functions ----
 
-# Restarting onto fewer nodes would only pack the survivors. A KEEP_UNSCHEDULABLE node is cordoned on purpose,
-# so it counts as expected and gets no pods.
+# Restarting onto fewer nodes would only pack the survivors.
 assert_all_nodes_schedulable() {
   local nodes_json not_ok node_count
   say "checking every node is Ready and schedulable"
   nodes_json="$(kubectl get nodes -o json)" || die "could not list nodes"
-  not_ok="$(printf '%s' "$nodes_json" | KEEP="$KEEP_UNSCHEDULABLE" python3 -c '
-import json,os,sys
-keep = set(os.environ["KEEP"].split())
+  not_ok="$(printf '%s' "$nodes_json" | python3 -c '
+import json,sys
 for n in json.load(sys.stdin)["items"]:
     name = n["metadata"]["name"]
     ready = next((c["status"] for c in n["status"]["conditions"] if c["type"] == "Ready"), "Unknown")
-    if n["spec"].get("unschedulable") and name not in keep: print(f"{name} (cordoned)")
-    elif ready != "True":                                   print(f"{name} (Ready={ready})")
+    if n["spec"].get("unschedulable"): print(f"{name} (cordoned)")
+    elif ready != "True":              print(f"{name} (Ready={ready})")
 ')"
   [ -z "$not_ok" ] || die "not rebalancing, these nodes cannot take pods: ${not_ok//$'\n'/, }. Wait for them to
 come back, or uncordon them, then re-run: make rebalance-workloads"
   node_count="$(printf '%s' "$nodes_json" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["items"]))')"
   [ "$node_count" -eq "${#ALL_HOSTS[@]}" ] \
     || die "the cluster has ${node_count} nodes and inventory.yaml expects ${#ALL_HOSTS[@]}. A rebalance now would skew the spread"
-  ok "all ${node_count} nodes Ready and schedulable${KEEP_UNSCHEDULABLE:+, except ${KEEP_UNSCHEDULABLE}, cordoned on purpose}"
+  ok "all ${node_count} nodes Ready and schedulable"
 }
 
 pods_per_node() {
