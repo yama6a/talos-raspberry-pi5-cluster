@@ -121,7 +121,7 @@ INVENTORY="${REPO_ROOT}/inventory.yaml"
 [ -z "${CLUSTER_NODES:-}" ] || die "CLUSTER_NODES is still set in .env. The node list lives in inventory.yaml, so delete that line."
 require yq
 
-declare -A NODE_IP NODE_ROLE NODE_TYPE NODE_IMAGE_SOURCE NODE_IMAGE_FILE NODE_IMAGE_SCHEMATIC NODE_INSTALL_DISK
+declare -A NODE_IP NODE_ROLE NODE_TYPE NODE_IMAGE_SOURCE NODE_IMAGE_FILE NODE_IMAGE_SCHEMATIC NODE_INSTALL_DISK NODE_TAINTS
 ALL_HOSTS=()
 ALL_IPS=() # every node, in inventory order
 CP_HOSTS=()
@@ -131,7 +131,7 @@ WORKER_IPS=()
 # No per-hardware subsets here: 03b and 03d filter on NODE_TYPE next to their hardware-specific checks.
 
 # Joined on '|', not @tsv: `read` collapses a run of tabs, so an empty imageSchematic would shift every later field.
-while IFS='|' read -r _h _ip _role _type _src _file _sch _disk; do
+while IFS='|' read -r _h _ip _role _type _src _file _sch _disk _taints; do
   [ -n "$_h" ] || continue
   for _f in ip:"$_ip" role:"$_role" type:"$_type" imageSource:"$_src" imageFile:"$_file" installDisk:"$_disk"; do
     [ -n "${_f#*:}" ] || die "inventory: node '${_h}' is missing ${_f%%:*}"
@@ -144,6 +144,10 @@ while IFS='|' read -r _h _ip _role _type _src _file _sch _disk; do
     *) die "inventory: node '${_h}' has imageSource '${_src}', want github-release or image-factory" ;;
   esac
   case "$_disk" in /dev/?*) ;; *) die "inventory: node '${_h}' has installDisk '${_disk}', want a whole-device path like /dev/nvme0n1 or /dev/sda" ;; esac
+  for _t in $_taints; do
+    [[ "$_t" =~ ^[^=:]+=[^=:]*:(NoSchedule|PreferNoSchedule|NoExecute)$ ]] \
+      || die "inventory: node '${_h}' has taint '${_t}', want <key>: <value>:<NoSchedule|PreferNoSchedule|NoExecute>"
+  done
   [ -z "${NODE_IP[$_h]:-}" ] || die "inventory: '${_h}' appears twice"
   NODE_IP[$_h]="$_ip"
   NODE_ROLE[$_h]="$_role"
@@ -152,6 +156,7 @@ while IFS='|' read -r _h _ip _role _type _src _file _sch _disk; do
   NODE_IMAGE_FILE[$_h]="$_file"
   NODE_IMAGE_SCHEMATIC[$_h]="$_sch"
   NODE_INSTALL_DISK[$_h]="$_disk"
+  NODE_TAINTS[$_h]="$_taints"
   ALL_HOSTS+=("$_h")
   ALL_IPS+=("$_ip")
   if [ "$_role" = controlplane ]; then
@@ -161,7 +166,7 @@ while IFS='|' read -r _h _ip _role _type _src _file _sch _disk; do
     WORKER_HOSTS+=("$_h")
     WORKER_IPS+=("$_ip")
   fi
-done < <(yq -r '.nodes[] | [.host, .ip, .role, .type, .imageSource, .imageFile, (.imageSchematic // ""), (.installDisk // "")] | join("|")' "$INVENTORY")
+done < <(yq -r '.nodes[] | [.host, .ip, .role, .type, .imageSource, .imageFile, (.imageSchematic // ""), (.installDisk // ""), ((.taints // {}) | to_entries | map(.key + "=" + .value) | join(" "))] | join("|")' "$INVENTORY")
 
 [ "${#CP_HOSTS[@]}" -gt 0 ] || die "inventory: no node has role controlplane, so there is no cluster to build"
 [ "$(printf '%s\n' "${ALL_IPS[@]}" | sort -u | grep -c .)" -eq "${#ALL_IPS[@]}" ] \
@@ -274,6 +279,37 @@ run_step() {
     return 1
   fi
   die "${hint:-${script} failed. Fix it and resume from ${script%.sh} by hand}"
+}
+
+# ---- node taints ----
+
+OWNED_TAINTS_ANNOTATION="inventory.local/owned-taints"
+NODE_REGISTER_TIMEOUT=300 # secs a new node gets to appear in the API
+
+# kubectl, not KubeNodeConfig: Talos changes a worker with the kubelet's credentials, and NodeRestriction refuses
+# taint changes from a kubelet. The annotation lists what this repo set, so it never removes a taint it does not own.
+sync_node_taints() {
+  local host="$1" deadline=$((SECONDS + NODE_REGISTER_TIMEOUT)) owned key keys="" taint
+  until kubectl get node "$host" > /dev/null 2>&1; do
+    [ -n "${NODE_TAINTS[$host]:-}" ] || return 0
+    [ "$SECONDS" -lt "$deadline" ] || die "${host} did not register in ${NODE_REGISTER_TIMEOUT}s, so its taints are not set"
+    sleep 5
+  done
+  owned="$(kubectl get node "$host" -o jsonpath="{.metadata.annotations.${OWNED_TAINTS_ANNOTATION//./\\.}}")"
+  for taint in ${NODE_TAINTS[$host]:-}; do keys="${keys:+${keys},}${taint%%=*}"; done
+  for key in ${owned//,/ }; do
+    [[ ",${keys}," == *",${key},"* ]] || kubectl taint node "$host" "${key}-" > /dev/null \
+      || warn "could not remove taint ${key} from ${host}. It may be gone already"
+  done
+  for taint in ${NODE_TAINTS[$host]:-}; do
+    kubectl taint node "$host" "$taint" --overwrite > /dev/null || die "could not set taint ${taint} on ${host}"
+  done
+  if [ -n "$keys" ]; then
+    kubectl annotate node "$host" "${OWNED_TAINTS_ANNOTATION}=${keys}" --overwrite > /dev/null
+  elif [ -n "$owned" ]; then
+    kubectl annotate node "$host" "${OWNED_TAINTS_ANNOTATION}-" > /dev/null
+  fi
+  [ "$owned" = "$keys" ] || ok "${host}: taints now [${keys}], were [${owned}]"
 }
 
 # ---- drain ----

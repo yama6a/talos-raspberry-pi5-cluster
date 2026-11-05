@@ -41,6 +41,10 @@ add-node: ## 03c: join one node from maintenance mode into the running cluster, 
 reapply-talos-config: ## 03c: push a changed machine config to running nodes, after a dry run and a confirm. NODE=<hostname> for one, omit for all.
 	bash lib/shell/03c_talos_cluster_config.sh --reapply $(NODE)
 
+.PHONY: sync-node-taints
+sync-node-taints: ## Make node taints match inventory.yaml. No machine config change, no reboot.
+	bash lib/shell/sync_node_taints.sh
+
 .PHONY: harden-nics
 harden-nics: ## 03d: apply the nic-keeper DaemonSet and check the Pi 5 NIC offloads, rings and watchdog that 03c set.
 	bash lib/shell/03d_nic_hardening.sh
