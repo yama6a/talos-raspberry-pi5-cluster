@@ -564,3 +564,6 @@ elif [ -n "$JOIN_ONE" ]; then
 else
   bootstrap_etcd_and_fetch_kubeconfig
 fi
+
+use_kubeconfig
+for host in "${TARGETS[@]}"; do sync_node_taints "$host"; done

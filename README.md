@@ -150,6 +150,7 @@ lifecycle:
 | Upgrade Talos             | `make upgrade-talos`                                                          |
 | Upgrade Kubernetes        | `make upgrade-k8s`                                                            |
 | Change machine config     | `make reapply-talos-config [NODE=<host>]`                                     |
+| Change node taints        | `make sync-node-taints`                                                       |
 | Add a node                | `make add-node NODE=<host>`                                                   |
 | Recover a lost node       | `make recover-node NODE=<host>`                                               |
 | Remove a node             | `make remove-node NODE=<host>`                                                |

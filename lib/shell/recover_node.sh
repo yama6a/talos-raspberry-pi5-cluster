@@ -179,6 +179,7 @@ wait_for_node_ready() {
   fi
   kubectl taint node "$NODE" node.kubernetes.io/out-of-service- > /dev/null 2>&1 \
     && ok "removed the out-of-service taint from ${NODE}"
+  sync_node_taints "$NODE"
   return 0
 }
 

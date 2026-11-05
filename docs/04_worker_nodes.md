@@ -9,7 +9,7 @@ A node has a role, a hardware type and its own image source. So the node list is
 string. `inventory.example.yaml` documents every field. `common.sh` parses the file once and derives the arrays
 every script iterates.
 
-- **Derived, not stored.** Seven keys, one of them optional. There is no `arch`: `imageFile` names it and the
+- **Derived, not stored.** Eight keys, two of them optional. There is no `arch`: `imageFile` names it and the
   kubelet sets `kubernetes.io/arch`. Which `03b` checks run and whether the node gets the Pi 5 NIC fix follow from `type`.
 - **`installDisk` has no default.** A default of `/dev/nvme0n1` would let a forgotten value install to a device
   nobody looked at. `03b` and `03c` both check that the node has the disk before anything is written.
@@ -19,6 +19,17 @@ every script iterates.
 - **No hardware-type table.** A node's whole definition sits in one entry. The cost: nodes of the same type repeat
   five fields and could disagree. `common.sh` checks presence, the two enums and unique hosts and IPs. It cannot
   catch an image for the wrong architecture, which you find at boot.
+
+## Taints
+
+`inventory.yaml` holds each node's `taints`, and `kubectl` sets them. `03c`, `recover-node` and
+`make sync-node-taints` all apply them.
+
+- **`kubectl`, not `KubeNodeConfig.taints`.** Talos changes a worker with the kubelet's credentials, and the
+  NodeRestriction admission plugin refuses taint changes from a kubelet. One path for both roles beats a path per role.
+- **An ownership annotation, not a key prefix.** The `inventory.local/owned-taints` annotation lists the keys this
+  repo set, as `talos.dev/owned-labels` does for Talos. A taint removed from the inventory goes, and a taint set by
+  anything else stays, such as `node.kubernetes.io/out-of-service`. Any key works, so no workload toleration changes.
 
 ## Two image sources
 

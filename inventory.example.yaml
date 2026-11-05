@@ -11,6 +11,8 @@
 #   installDisk      REQUIRED: the whole device Talos installs to, as the node names it: /dev/nvme0n1, /dev/sda.
 #                    EPHEMERAL and the `storage` volume land there too. To read it from a node in maintenance:
 #                    make talosctl -- -n <ip> get disks --insecure
+#   taints           OPTIONAL: a map of <key>: <value>:<effect>, for example dedicated: myapp:NoSchedule. A taint
+#                    removed here leaves the node on the next `make sync-node-taints`
 #
 # The two image sources are explained in docs/04_worker_nodes.md.
 
