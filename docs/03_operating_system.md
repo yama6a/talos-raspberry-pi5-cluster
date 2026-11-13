@@ -128,7 +128,9 @@ node, `03e`:
    checks health again.
 3. Cordons and drains gracefully, then force-deletes stragglers so the node can always reboot.
    `FORCE_DELETE_SKIP` spares pods that must not be force-killed.
-4. Upgrades, waits for cluster health, and uncordons.
+4. Upgrades, then writes the new installer image into the node's machine config. `talosctl upgrade` leaves the
+   old one there. Only that field changes, so no other pending config change reaches the node.
+5. Waits for cluster health and uncordons.
 
 - **Health is the cluster's own business.** This repo cannot know what the cluster runs, so the check is a hook.
   Left empty, nothing gates the reboot, and `03e` warns.

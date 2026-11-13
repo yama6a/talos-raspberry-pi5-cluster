@@ -108,6 +108,7 @@ upgrade_host() {
   else
     die "${ip} upgrade failed, see above. The cluster is left as it is. Fix it, then resume: make upgrade-talos NODES=\"${from_here}\""
   fi
+  record_installer "$host" "$installer"
 
   say "waiting for cluster health before the next node"
   resume="Nothing is left to upgrade."
@@ -117,6 +118,17 @@ upgrade_host() {
 
   uncordon_node "$node"
   DRAINING_NODE=""
+}
+
+# talosctl upgrade leaves the stored machine config naming the old installer. Talos reads it only to install,
+# so the drift is harmless, but every later reapply dry run shows it. Only this node's installer changes, so no
+# other pending config change rides along. A failure warns: the upgrade itself succeeded.
+record_installer() {
+  local host="$1" installer="$2" ip="${NODE_IP[$1]}"
+  talosctl -n "$ip" patch mc --mode no-reboot \
+    -p "$(printf '{"apiVersion":"v1alpha1","kind":"UnattendedInstallConfig","installer":{"image":"%s"}}' "$installer")" \
+    > /dev/null \
+    || warn "${ip}'s machine config still names the old installer. make reapply-talos-config NODE=${host} fixes it"
 }
 
 rebalance_workloads() {
