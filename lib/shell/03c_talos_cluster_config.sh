@@ -252,10 +252,14 @@ resources:
   requests:
     cpu: 200m
     memory: 2Gi
-# Go lets the heap reach twice the live size before it collects. This soft limit collects earlier.
-# Much lower, and a re-list storm would keep the collector running nonstop.
+# Go lets the heap reach twice the live size before it collects. GOMEMLIMIT collects earlier, just under the
+# 2Gi request. It counts all Go memory. At peak that is about 1.2 GiB live heap, 300 MiB fragmentation and
+# 100 MiB stacks. At 1500MiB the collector ran nonstop and took 5 cores on tc3.
+# memprofilerate=0 turns off the Go memory profiler. Go never frees its per-stack records, so they grew by
+# 7 MiB a day (golang/go#69590). Talos sets --profiling=false, so nothing reads them.
 env:
-  GOMEMLIMIT: 1500MiB
+  GOMEMLIMIT: 1900MiB
+  GODEBUG: memprofilerate=0
 # Histograms no dashboard or alert reads. A disabled metric is never recorded, so it costs no CPU or memory.
 # apiserver_request_duration_seconds stays, because a dashboard reads its _count and _sum.
 extraArgs:
