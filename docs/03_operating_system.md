@@ -98,6 +98,11 @@ are comments in `lib/shell/03c_talos_cluster_config.sh`. The decisions that shap
   a 15 MB `/metrics` body and about 65,000 series, and no dashboard or alert reads them. The cost: a per-resource
   latency or size question needs the flag edited and a reapply first. The flag ignores a name that does not
   exist, so a metric renamed in a Kubernetes upgrade comes back without warning.
+- **The apiserver requests 2Gi and collects garbage before 1900MiB.** The Talos default request is 512Mi, far
+  below real use, so the scheduler overpacked the Pis until pods were OOM-killed. `GOMEMLIMIT` keeps the
+  apiserver's memory under the request. The cost: GC CPU climbs once its memory need nears the limit. On
+  v1.37.2 the need is about 1.6 GiB at peak, and more CRDs raise it. `GODEBUG=memprofilerate=0` turns off the
+  Go memory profiler, whose records Go never frees. The cost: a heap profile needs the setting removed first.
 - **Registry auth sits on the node.** With `GITHUB_GHCR_PULL_TOKEN_SECRET` set, every node authenticates every
   `ghcr.io` pull, so no workload needs `imagePullSecrets`. The cost: the token lives in the machine config, and
   rotating it means a new `.env` value and `make reapply-talos-config`. GHCR accepts only a classic token.
