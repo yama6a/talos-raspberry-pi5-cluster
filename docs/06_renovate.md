@@ -6,7 +6,7 @@ Renovate opens PRs that bump every pinned dependency in the repo. Setup is in th
 - Config: [`renovate.json5`](../renovate.json5), which extends the shared preset `github>yama6a/gha:default.json5`.
 - Runner: [`.github/workflows/renovate.yaml`](../.github/workflows/renovate.yaml), daily at 05:13 UTC, plus
   `workflow_dispatch`.
-- Gate: [`.github/workflows/ci.yaml`](../.github/workflows/ci.yaml). Its `shell`, `yaml` and `renovate-config` jobs
+- Gate: [`.github/workflows/ci.yaml`](../.github/workflows/ci.yaml). Its `shell` and `yaml` jobs
   are required checks on `main`, set by `scripts/repo-settings.sh` in `yama6a/gha`.
 
 ## Why Renovate, not Dependabot
